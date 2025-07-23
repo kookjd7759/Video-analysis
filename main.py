@@ -8,6 +8,7 @@ is_raspberry_pi = platform.machine().startswith("arm") or 'raspi' in platform.un
 processor = YOLORealSenseProcessor()
 
 if is_raspberry_pi:
+    print('raspberry pi version execution')
     app = Flask(__name__)
 
     def gen():
@@ -30,7 +31,7 @@ if is_raspberry_pi:
         app.run(host='0.0.0.0', port=5000, debug=False)
         processor.stop()
 else:
-    print("🪟  Windows 환경: 실시간 영상 출력 시작")
+    print('window version execution')
     try:
         while True:
             frame = processor.get_frame()
