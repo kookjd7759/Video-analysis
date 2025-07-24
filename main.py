@@ -3,12 +3,17 @@ import cv2
 from flask import Flask, Response
 from process_frame import YOLORealSenseProcessor
 
-is_raspberry_pi = platform.machine().startswith("arm") or 'raspi' in platform.uname().node.lower()
-
 processor = YOLORealSenseProcessor()
 
-if is_raspberry_pi:
-    print('raspberry pi version execution')
+def is_raspberry_pi():
+    try:
+        with open('/proc/device-tree/model', 'r') as f:
+            return 'Raspberry Pi' in f.read()
+    except Exception:
+        return False
+
+if is_raspberry_pi():
+    print('🍓 raspberry pi version execution')
     app = Flask(__name__)
 
     def gen():
@@ -27,11 +32,11 @@ if is_raspberry_pi:
         return Response(gen(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
     if __name__ == '__main__':
-        print("🌐  Raspberry Pi에서 웹 스트리밍을 시작합니다: http://<라즈베리_IP>:5000/video_feed")
+        print("🌐  Raspberry Pi에서 웹 스트리밍을 시작합니다: http://192.168.0.15:5000/video_feed")
         app.run(host='0.0.0.0', port=5000, debug=False)
         processor.stop()
 else:
-    print('window version execution')
+    print('🖥️ window version execution')
     try:
         while True:
             frame = processor.get_frame()

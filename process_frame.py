@@ -6,14 +6,14 @@ from ultralytics import YOLO
 import torchvision.ops as ops
 
 class YOLORealSenseProcessor:
-    def __init__(self, model_path='yolo11s.pt'):
+    def __init__(self, model_path='yolov5s.pt'):
         self.model = YOLO(model_path)
         self.model.fuse()
 
         self.pipeline = rs.pipeline()
         config = rs.config()
-        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 15)
+        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 15)
         self.profile = self.pipeline.start(config)
 
         sensor = self.profile.get_device().first_depth_sensor()
@@ -46,7 +46,7 @@ class YOLORealSenseProcessor:
         depth_img = np.asanyarray(depth_frame.get_data())
         color_img = np.asanyarray(color_frame.get_data())
 
-        result = self.model.predict(source=color_img, imgsz=640, conf=0.25, device="cpu", verbose=False)[0]
+        result = self.model.predict(source=color_img, imgsz=320, conf=0.25, device="cpu", verbose=False)[0]
 
         boxes, scores, classes = [], [], []
         for box in result.boxes:
