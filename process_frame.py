@@ -6,10 +6,12 @@ from ultralytics import YOLO
 import torchvision.ops as ops
 
 class YOLORealSenseProcessor:
-    def __init__(self, model_path='yolov5n.pt'):
+    def __init__(self, model_path='yolov5n.pt', device='cpu'):
         self.model = YOLO(model_path)
         self.model.fuse()
+        self.device = device
 
+        # RealSense 설정
         self.pipeline = rs.pipeline()
         config = rs.config()
         config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 15)
@@ -22,6 +24,7 @@ class YOLORealSenseProcessor:
 
         self.align = rs.align(rs.stream.color)
 
+        # 항상 사용할 depth 필터
         self.spatial = rs.spatial_filter()
         self.spatial.set_option(rs.option.filter_magnitude, 5)
         self.spatial.set_option(rs.option.filter_smooth_alpha, 0.5)
@@ -39,73 +42,75 @@ class YOLORealSenseProcessor:
         if not depth_frame or not color_frame:
             return None
 
+        # 필터 항상 적용
         depth_frame = self.spatial.process(depth_frame)
         depth_frame = self.temporal.process(depth_frame)
         depth_frame = self.hole_filling.process(depth_frame)
 
-        depth_img = np.asanyarray(depth_frame.get_data())
         color_img = np.asanyarray(color_frame.get_data())
+        depth_img = np.asanyarray(depth_frame.get_data())
 
-        result = self.model.predict(source=color_img, imgsz=320, conf=0.25, device="cpu", verbose=False)[0]
+        # YOLO 추론 (사람만)
+        result = self.model.predict(
+            source=color_img,
+            imgsz=320,
+            conf=0.5,
+            device=self.device,
+            classes=[0],
+            verbose=False
+        )[0]
 
-        boxes, scores, classes = [], [], []
+        boxes, scores = [], []
         for box in result.boxes:
             x1, y1, x2, y2 = map(float, box.xyxy[0])
+            conf = float(box.conf[0])
             boxes.append([x1, y1, x2, y2])
-            scores.append(float(box.conf[0]))
-            classes.append(int(box.cls[0]))
+            scores.append(conf)
 
         all_boxes = []
-        closest_distance = float('inf')
-        closest_box = None
 
         if boxes:
             boxes_tensor = torch.tensor(boxes)
             scores_tensor = torch.tensor(scores)
             keep_idxs = ops.nms(boxes_tensor, scores_tensor, iou_threshold=0.45)
-            for i in keep_idxs:
-                x1, y1, x2, y2 = map(int, boxes[i])
-                cls = classes[i]
-                class_name = self.model.names[cls] if cls is not None else "unknown"
 
+            for i in keep_idxs.tolist():
+                x1, y1, x2, y2 = map(int, boxes[i])
                 x1_c, x2_c = np.clip([x1, x2], 0, depth_img.shape[1] - 1)
                 y1_c, y2_c = np.clip([y1, y2], 0, depth_img.shape[0] - 1)
-                roi = depth_img[y1_c:y2_c, x1_c:x2_c].astype(np.float32)
 
-                if roi.size < 9:
+                roi = depth_img[y1_c:y2_c, x1_c:x2_c].astype(np.float32)
+                roi = roi[roi > 0]
+
+                if roi.size == 0:
                     continue
 
-                avg = cv2.boxFilter(roi, -1, (3, 3), normalize=True)
-                mask = (np.abs(roi - avg) < 500) & (roi > 0)
-                valid = roi[mask]
+                top5 = np.sort(roi)[:max(1, len(roi) * 10 // 100)]
+                mean_depth = top5.mean() * self.depth_scale
+                distance = mean_depth if 0.2 <= mean_depth <= 10.0 else 0.0
 
-                if valid.size > 0:
-                    top5 = np.sort(valid)[:max(1, len(valid) * 5 // 100)]
-                    mean_depth = top5.mean() * self.depth_scale
+                all_boxes.append((x1, y1, x2, y2, "person", distance))
 
-                    avg_distance = 0.0 if not (0.2 <= mean_depth <= 10.0) else mean_depth
-                else:
-                    avg_distance = 0.0
-
-                all_boxes.append((x1, y1, x2, y2, class_name, avg_distance))
-
-                if 0 < avg_distance < closest_distance:
-                    closest_distance = avg_distance
-                    closest_box = (x1, y1, x2, y2)
-
-        for x1, y1, x2, y2, class_name, avg_distance in all_boxes:
-            color = (0, 0, 255) if (x1, y1, x2, y2) == closest_box else (0, 255, 0)
-            label = f"{class_name} ({avg_distance:.2f} m)"
+        # 초록 박스로 모든 사람 표시
+        for x1, y1, x2, y2, class_name, distance in all_boxes:
+            color = (0, 255, 0)  # 초록색 고정
+            label = f"{class_name} ({distance:.2f} m)"
             cv2.rectangle(color_img, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(color_img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            cv2.putText(color_img, label, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
+        # depth 컬러맵 시각화
         depth_m = depth_img.astype(np.float32) * self.depth_scale
         depth_clip = np.clip(depth_m, 0.0, 4.0)
         depth_u8 = ((depth_clip / 4.0) * 255).astype(np.uint8)
         depth_color = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
+        depth_color = cv2.resize(depth_color, (color_img.shape[1], color_img.shape[0]))
 
         combined = np.hstack((color_img, depth_color))
         return combined
 
     def stop(self):
         self.pipeline.stop()
+
+    def __del__(self):
+        self.stop()
