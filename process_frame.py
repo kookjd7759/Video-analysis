@@ -74,7 +74,6 @@ class YOLORealSenseProcessor:
             return None, []
 
         # 필터 적용
-        depth_frame = self.decimate.process(depth_frame)
         depth_frame = self.spatial.process(depth_frame)
         depth_frame = self.temporal.process(depth_frame)
         depth_frame = self.hole_filling.process(depth_frame)
