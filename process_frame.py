@@ -62,8 +62,9 @@ class YOLORealSenseProcessor:
     def get_frame(self):
         """
         반환:
-          - combined: (컬러 + 뎁스 색상맵) 합친 프레임 (H x 2W x 3)
-          - detections: [{"label":"person","distance":1.23}, ...]
+        - combined: (컬러 + 뎁스 색상맵) 합친 프레임 (H x 2W x 3)
+        - detections: [{"label":"person","distance":1.23, "center":0.42}, ...]
+            * center: 컬러 프레임 기준 x중심 정규화(왼쪽=0.0 ~ 오른쪽=1.0)
         """
         frames = self.pipeline.wait_for_frames()
         aligned = self.align.process(frames)
@@ -73,21 +74,19 @@ class YOLORealSenseProcessor:
             return None, []
 
         # 필터 적용
+        depth_frame = self.decimate.process(depth_frame)
         depth_frame = self.spatial.process(depth_frame)
         depth_frame = self.temporal.process(depth_frame)
         depth_frame = self.hole_filling.process(depth_frame)
 
         color_img = np.asanyarray(color_frame.get_data())
         depth_img = np.asanyarray(depth_frame.get_data())
+        H, W = color_img.shape[:2] 
 
-        # YOLO 추론 (사람만) — 모든 클래스 원하면 classes=None
+        # YOLO 추론 (사람만)
         result = self.model.predict(
-            source=color_img,
-            imgsz=256,
-            conf=0.5,
-            device=self.device,
-            classes=[0],  # person 클래스만. 모두 원하면 주석 처리 or None
-            verbose=False
+            source=color_img, imgsz=192, conf=0.5,
+            device=self.device, classes=[0], verbose=False
         )[0]
 
         boxes, scores, clses = [], [], []
@@ -112,14 +111,24 @@ class YOLORealSenseProcessor:
                 cls_id = clses[i]
                 label = result.names.get(cls_id, "obj") if hasattr(result, "names") else "obj"
 
+                # 거리 계산
                 d = self._distance_from_roi_closest10_mean(depth_img, x1, y1, x2, y2)
-                all_boxes.append((x1, y1, x2, y2, label, d))
-                detections.append({"label": label, "distance": round(d, 2)})
+
+                # 중심 x 좌표 정규화 (0~1)
+                xc = (x1 + x2) / 2.0
+                center_norm = float(np.clip(xc / max(W, 1), 0.0, 1.0))
+
+                all_boxes.append((x1, y1, x2, y2, label, d, center_norm))
+                detections.append({
+                    "label": label,
+                    "distance": round(d, 2),
+                    "center": round(center_norm, 4)  # 소수 4자리 정도로
+                })
 
         # 시각화(박스 + 라벨)
-        for x1, y1, x2, y2, label, d in all_boxes:
+        for x1, y1, x2, y2, label, d, center_norm in all_boxes:
             color = (0, 255, 0)
-            txt = f"{label} ({d:.2f} m)" if d > 0 else f"{label} (N/A)"
+            txt = f"{label} ({d:.2f} m)"
             cv2.rectangle(color_img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(color_img, txt, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
