@@ -169,7 +169,6 @@ def radar_png():
         px, py = pol2pix_from_center(center, dist, origin, R, hfov_deg=hfov, dmax=dmax)
         # 빨간색 꽉 찬 원 (radius=6)
         cv2.circle(img, (px, py), 6, (0, 0, 255), -1, cv2.LINE_AA)
-        # 가독성 위해 얇은 외곽선(선택): 원하면 아래 줄 유지, 필요없으면 지워도 됨
         cv2.circle(img, (px, py), 6, (0, 0, 0), 1, cv2.LINE_AA)
         # 거리 텍스트
         cv2.putText(img, f"{dist:.2f}m", (px + 10, py - 8),
