@@ -2,7 +2,6 @@ from analysis import AnalysisApp
 import time
 
 app = AnalysisApp()
-
 app.start_background_capture()
 app.start_server(host="0.0.0.0", port=5000)
 
