@@ -6,7 +6,6 @@ app = AnalysisApp()
 app.start_background_capture()
 app.start_server(host="0.0.0.0", port=5000)
 
-# 3) 너의 폴링 루프
 try:
     while True:
         print(app.get_current_detections_list())
