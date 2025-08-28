@@ -4,6 +4,7 @@ import numpy as np
 from flask import Flask, Response, jsonify, request
 from process_frame import YOLORealSenseProcessor
 
+
 app = Flask(__name__)
 processor = YOLORealSenseProcessor()
 
