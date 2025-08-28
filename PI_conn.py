@@ -28,9 +28,10 @@ try:
         remote_dir = '/home/solimatics/Video_analysis'
         client.exec_command(f"mkdir -p {remote_dir}")
 
-        file_names = ['process_frame', 'main']
-        remote_process_path = remote_dir + '/process_frame.py'
-        remote_main_path = remote_dir + '/main.py'
+        file_names = ['processor', 'analysis', 'test']
+        remote_process_path = remote_dir + '/processor.py'
+        remote_main_path = remote_dir + '/analysis.py'
+        remote_main_path = remote_dir + '/test.py'
         
         for name in file_names:
             try:
