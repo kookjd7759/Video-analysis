@@ -351,7 +351,6 @@ class AnalysisApp:
         except Exception:
             return False
 
-
 # -------------------------------
 # 실행부
 # -------------------------------
