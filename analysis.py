@@ -360,9 +360,6 @@ class AnalysisApp:
 if __name__ == '__main__':
     app = AnalysisApp()
     if app.is_raspberry_pi():
-        # 라즈베리파이: 서버로 띄우기 (필요하면 아래 한 줄로 캡처도 병행 가능)
-        # app.start_background_capture()  # ⚠ /video_feed와 동시 사용 시 카메라 리소스 중복 주의
         app.run_server(host='0.0.0.0', port=5000, debug=False, threaded=True)
     else:
-        # PC: 로컬 미리보기
         app.run_local_preview()
