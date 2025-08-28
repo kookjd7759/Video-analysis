@@ -34,8 +34,8 @@ class YOLORealSenseProcessor:
         self.spatial.set_option(rs.option.filter_smooth_delta, 20)
 
         self.temporal = rs.temporal_filter()
-        self.hole_filling = rs.hole_filling_filter()
-        self.hole_filling.set_option(rs.option.holes_fill, 2)
+        # self.hole_filling = rs.hole_filling_filter()
+        # self.hole_filling.set_option(rs.option.holes_fill, 2)
 
     def _distance_from_roi_closest10_mean(self, depth_img, x1, y1, x2, y2):
         """ROI에서 가까운 픽셀 하위 10% 평균(미터). 유효값 없으면 0.0"""
@@ -76,7 +76,7 @@ class YOLORealSenseProcessor:
         # 필터 적용
         depth_frame = self.spatial.process(depth_frame)
         depth_frame = self.temporal.process(depth_frame)
-        depth_frame = self.hole_filling.process(depth_frame)
+        # depth_frame = self.hole_filling.process(depth_frame)
 
         color_img = np.asanyarray(color_frame.get_data())
         depth_img = np.asanyarray(depth_frame.get_data())

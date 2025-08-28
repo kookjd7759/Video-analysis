@@ -4,13 +4,12 @@ import numpy as np
 from flask import Flask, Response, jsonify, request
 from process_frame import YOLORealSenseProcessor
 
-
 app = Flask(__name__)
 processor = YOLORealSenseProcessor()
 
 # ===== 스트림 / 레이더 기본 설정 =====
-STREAM_W = 960          # 스트림 가로 리사이즈(원본이 더 크면 축소)
-JPEG_QUALITY = 60       # JPEG 품질(50~70 추천)
+STREAM_W = 640          # 스트림 가로 리사이즈(원본이 더 크면 축소)
+JPEG_QUALITY = 40       # JPEG 품질(50~70 추천)
 HFOV_DEG = 87.0         # 카메라 수평 FOV(도)
 DMAX_M = 4.0            # 레이더 최대 표시 거리(미터)
 
