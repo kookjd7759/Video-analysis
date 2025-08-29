@@ -29,10 +29,6 @@ try:
         client.exec_command(f"mkdir -p {remote_dir}")
 
         file_names = ['processor', 'analysis', 'test']
-        remote_process_path = remote_dir + '/processor.py'
-        remote_main_path = remote_dir + '/analysis.py'
-        remote_main_path = remote_dir + '/test.py'
-        
         for name in file_names:
             try:
                 local_path = os.path.join(base_path, f'{name}.py')
