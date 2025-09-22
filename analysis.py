@@ -13,7 +13,7 @@ class AnalysisApp:
         self.STREAM_W = 640          # 스트림 가로 리사이즈(원본이 더 크면 축소)
         self.JPEG_QUALITY = 40       # JPEG 품질(50~70 추천)
         self.HFOV_DEG = 87.0         # 카메라 수평 FOV(도)
-        self.DMAX_M = 4.0            # 레이더 최대 표시 거리(미터)
+        self.DMAX_M = 20.0            # 레이더 최대 표시 거리(미터)
 
         # Radar helpers 색
         self.GRID = (60, 220, 110)   # 라인 색(초록)
