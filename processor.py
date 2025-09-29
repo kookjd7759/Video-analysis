@@ -6,7 +6,7 @@ from ultralytics import YOLO
 import torchvision.ops as ops
 
 class YOLORealSenseProcessor:
-    def __init__(self, model_path='yolov8n.pt', device='cpu'):
+    def __init__(self, model_path='yolo11x.pt', device='cpu'):
         # YOLO 로드
         self.model = YOLO(model_path)
         self.device = device
