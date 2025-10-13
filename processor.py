@@ -6,10 +6,43 @@ from ultralytics import YOLO
 import torchvision.ops as ops
 
 class YOLORealSenseProcessor:
-    def __init__(self, model_path='yolo11x.pt', device='cpu'):
+    def __init__(
+        self,
+        model_path='yolo11x.pt',
+        device='cpu',
+        conf_threshold=0.35,
+        iou_threshold=0.45,
+        imgsz=640,
+        max_det=20,
+        use_tta=False,
+    ):
+        """
+        Args:
+            model_path: 사용할 YOLO 가중치 파일.
+            device: 'cpu' 또는 'cuda:0' 등 추론에 사용할 장치.
+            conf_threshold: confidence threshold. 기본값을 다소 높여 오탐을 줄임.
+            iou_threshold: NMS 시 IoU 임계값.
+            imgsz: 추론 해상도. 192 -> 640 으로 올려 작은 객체 인식률 향상.
+            max_det: 한 프레임에서 허용할 최대 탐지 수.
+            use_tta: Test Time Augmentation(TTA) 사용 여부. 정확도 향상하지만 속도 저하.
+        """
+
         # YOLO 로드
         self.model = YOLO(model_path)
         self.device = device
+        try:
+            # 장치 지정 (GPU 사용 시 정확도 및 속도 향상)
+            self.model.to(self.device)
+        except Exception:
+            # to() 미지원 환경 대비
+            pass
+
+        # 추론 파라미터
+        self.conf_threshold = conf_threshold
+        self.iou_threshold = iou_threshold
+        self.imgsz = imgsz
+        self.max_det = max_det
+        self.use_tta = use_tta
 
         # RealSense 파이프라인
         self.pipeline = rs.pipeline()
@@ -84,8 +117,15 @@ class YOLORealSenseProcessor:
 
         # YOLO 추론 (사람만)
         result = self.model.predict(
-            source=color_img, imgsz=192, conf=0.5,
-            device=self.device, classes=[0], verbose=False
+            source=color_img,
+            imgsz=self.imgsz,
+            conf=self.conf_threshold,
+            iou=self.iou_threshold,
+            max_det=self.max_det,
+            device=self.device,
+            classes=[0],
+            verbose=False,
+            augment=self.use_tta,
         )[0]
 
         boxes, scores, clses = [], [], []
@@ -103,7 +143,7 @@ class YOLORealSenseProcessor:
         if boxes:
             boxes_tensor = torch.tensor(boxes, dtype=torch.float32)
             scores_tensor = torch.tensor(scores, dtype=torch.float32)
-            keep_idxs = ops.nms(boxes_tensor, scores_tensor, iou_threshold=0.45)
+            keep_idxs = ops.nms(boxes_tensor, scores_tensor, iou_threshold=self.iou_threshold)
 
             for i in keep_idxs.tolist():
                 x1, y1, x2, y2 = map(int, boxes[i])
