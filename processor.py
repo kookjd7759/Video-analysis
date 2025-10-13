@@ -9,35 +9,21 @@ from ultralytics import YOLO
 class YOLORealSenseProcessor:
     def __init__(
         self,
-        model_path='yolo11x.pt',
+        model_path='yolo11n.pt',
         device='cpu',
-        conf_threshold=0.35,
-        iou_threshold=0.45,
+        conf_threshold=0.3,
+        iou_threshold=0.5,
         imgsz=640,
         max_det=20,
         use_tta=False,
         enable_depth_filters=None,
     ):
-        """
-        Args:
-            model_path: 사용할 YOLO 가중치 파일.
-            device: 'cpu' 또는 'cuda:0' 등 추론에 사용할 장치.
-            conf_threshold: confidence threshold. 기본값을 다소 높여 오탐을 줄임.
-            iou_threshold: NMS 시 IoU 임계값.
-            imgsz: 추론 해상도. 192 -> 640 으로 올려 작은 객체 인식률 향상.
-            max_det: 한 프레임에서 허용할 최대 탐지 수.
-            use_tta: Test Time Augmentation(TTA) 사용 여부. 정확도 향상하지만 속도 저하.
-            enable_depth_filters: 깊이 필터 사용 여부. None이면 플랫폼에 맞춰 자동 결정.
-        """
 
         self._is_raspberry_pi = self._detect_raspberry_pi()
 
         if self._is_raspberry_pi:
-            # 라즈베리파이에서는 경량 모델/낮은 해상도로 기본값 조정
-            if model_path == 'yolo11x.pt':
-                model_path = 'yolo11n.pt'
-            imgsz = min(imgsz, 448)
-            max_det = min(max_det, 10)
+            imgsz = min(imgsz, 640)
+            max_det = min(max_det, 8)
             # 추론 스레드가 CPU 전체를 점유하지 않도록 제한
             try:
                 cpu_threads = max(1, os.cpu_count() - 1)
@@ -46,13 +32,13 @@ class YOLORealSenseProcessor:
                 pass
 
         # YOLO 로드
-        self.model = YOLO(model_path)
+        tflite_path = YOLO(model_path).export(format='onnx', opset=12, simplify=True, dynamic=True)
+        self.model = YOLO(tflite_path)
         self.device = device
         try:
             # 장치 지정 (GPU 사용 시 정확도 및 속도 향상)
             self.model.to(self.device)
         except Exception:
-            # to() 미지원 환경 대비
             pass
 
         # 추론 파라미터
@@ -65,8 +51,8 @@ class YOLORealSenseProcessor:
         # RealSense 파이프라인
         self.pipeline = rs.pipeline()
         config = rs.config()
-        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 15)
-        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 15)
+        config.enable_stream(rs.stream.depth, 640, 360, rs.format.z16, 15)
+        config.enable_stream(rs.stream.color, 640, 360, rs.format.bgr8, 15)
         self.profile = self.pipeline.start(config)
 
         sensor = self.profile.get_device().first_depth_sensor()
@@ -99,34 +85,38 @@ class YOLORealSenseProcessor:
         # self.hole_filling.set_option(rs.option.holes_fill, 2)
 
     def _distance_from_roi_closest10_mean(self, depth_img, x1, y1, x2, y2):
-        """ROI에서 가까운 픽셀 하위 10% 평균(미터). 유효값 없으면 0.0"""
         h, w = depth_img.shape[:2]
         x1_c, x2_c = np.clip([x1, x2], 0, w - 1)
         y1_c, y2_c = np.clip([y1, y2], 0, h - 1)
         if x2_c <= x1_c or y2_c <= y1_c:
             return 0.0
 
-        roi = depth_img[y1_c:y2_c, x1_c:x2_c].astype(np.float32)
-        roi = roi[roi > 0]  # 미측정값 제거
-        if roi.size == 0:
+        roi = depth_img[y1_c:y2_c, x1_c:x2_c]
+        # 1) 먼저 거칠게 다운샘플 (계산량↓)
+        if roi.size > 0:
+            roi_small = cv2.resize(roi, (0,0), fx=0.25, fy=0.25, interpolation=cv2.INTER_NEAREST)
+        else:
             return 0.0
 
-        roi_m = roi * self.depth_scale
-        roi_m = roi_m[(roi_m >= 0.2) & (roi_m <= 10.0)]
-        if roi_m.size == 0:
+        roi_f = roi_small.astype(np.float32)
+        roi_f = roi_f[roi_f > 0]
+        if roi_f.size == 0:
             return 0.0
 
-        k = max(1, int(0.10 * roi_m.size))
-        closest = np.partition(roi_m, k - 1)[:k]
+        roi_m = roi_f * self.depth_scale
+        # 근거리/원거리 노이즈 컷
+        mask = (roi_m >= 0.2) & (roi_m <= 10.0)
+        if not np.any(mask):
+            return 0.0
+        vals = roi_m[mask]
+
+        k = max(1, int(0.10 * vals.size))
+        # np.partition은 이미 잘 쓰셨고, 다운샘플로 데이터량을 먼저 줄임
+        closest = np.partition(vals, k - 1)[:k]
         return float(closest.mean())
 
+
     def get_frame(self):
-        """
-        반환:
-        - combined: (컬러 + 뎁스 색상맵) 합친 프레임 (H x 2W x 3)
-        - detections: [{"label":"person","distance":1.23, "center":0.42}, ...]
-            * center: 컬러 프레임 기준 x중심 정규화(왼쪽=0.0 ~ 오른쪽=1.0)
-        """
         frames = self.pipeline.wait_for_frames()
         aligned = self.align.process(frames)
         depth_frame = aligned.get_depth_frame()
