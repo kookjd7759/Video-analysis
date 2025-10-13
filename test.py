@@ -10,6 +10,7 @@ def make_local_url(port=5000):
     return f"http://{ip}:{port}"
 
 url = make_local_url()
+print(f"url: {url}")
 app = AnalysisApp()
 app.start_background_capture()
 app.start_server(host="0.0.0.0", port=5000)
