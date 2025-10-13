@@ -22,7 +22,7 @@ class AnalysisApp:
         self.RED  = (0, 0, 255)      # 객체 사각형
 
         # 최신 인식 결과(비디오 루프/백그라운드에서 갱신)
-        self._latest_objects = []    # [{"label":"person","distance":..., "center":...}, ...]
+        self._latest_objects = []
         self._lock = threading.Lock()
 
         # 백그라운드 캡처 스레드 제어

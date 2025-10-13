@@ -94,7 +94,7 @@ try:
     elif flow == '3':
         print(' - PI video analysis 바로 실행 -')
         try:
-            command = 'cd ~/Video_analysis && python3 main.py'
+            command = 'cd ~/Video_analysis && python3 test.py'
             stdin, stdout, stderr = client.exec_command(command)
 
             for line in iter(stdout.readline, ''):
