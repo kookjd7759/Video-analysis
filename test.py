@@ -3,6 +3,9 @@ import time
 import subprocess
 import socket
 from modbus_worker import PollThread
+from send_ip import send_ip
+
+send_ip()
 
 def make_local_url(port=5000):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
