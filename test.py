@@ -1,6 +1,5 @@
 from analysis import AnalysisApp
 import time
-import subprocess
 import socket
 from modbus_worker import PollThread
 from send_ip import send_ip
@@ -24,7 +23,6 @@ app.start_background_capture()
 app.start_server(host="0.0.0.0", port=5000)
 
 try:
-    subprocess.Popen(["firefox", "--kiosk", url]) 
     while True:
         print(app.get_current_detections_list())
         time.sleep(0.2)
