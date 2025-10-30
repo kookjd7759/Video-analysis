@@ -28,7 +28,11 @@ try:
         remote_dir = '/home/solimatics/Video_analysis'
         client.exec_command(f"mkdir -p {remote_dir}")
 
-        file_names = ['processor', 'analysis', 'test', 'send_ip', 'koceti_485_Read_Modbus', 'modbus_worker']
+        file_names = ['analysis', 'Crane_MQTT', 'CraneDataSimulatorWorker', 
+                      'koceti_485_Read_Modbus', 'koceti_Read_Modbus', 'modbus_worker', 
+                      'processor', 'send_ip', 'shared_state', 
+                      'test'
+                      ]
         for name in file_names:
             try:
                 local_path = os.path.join(base_path, f'{name}.py')

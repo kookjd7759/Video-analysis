@@ -6,9 +6,8 @@ import time
 from flask import Flask, Response, jsonify, request
 from processor import YOLORealSenseProcessor
 
-
 class AnalysisApp:
-    def __init__(self):
+    def __init__(self, host="0.0.0.0", port=5000):
         # ===== 스트림 / 레이더 기본 설정 =====
         self.STREAM_W = 640          # 스트림 가로 리사이즈(원본이 더 크면 축소)
         self.JPEG_QUALITY = 40       # JPEG 품질(50~70 추천)
@@ -38,6 +37,20 @@ class AnalysisApp:
         self._latest_jpeg = None         # bytes (인코딩된 JPEG)
         self._last_frame_id = 0          # 프레임 증가 카운터
         self._new_frame_evt = threading.Event()
+        
+        # 연결할 네트워크 의 정보. 
+        self.host = host
+        self.port = port
+        
+        self.server_thread = None # 스레드 객체를 저장할 변수
+        # 종료 엔드포인트를 앱에 추가합니다.
+        @self.app.route('/shutdown', methods=['POST'])
+        def shutdown():
+            shutdown_func = request.environ.get('werkzeug.server.shutdown')
+            if shutdown_func is None:
+                raise RuntimeError('Not running with the Werkzeug Server')
+            shutdown_func()
+            return 'Server shutting down...'
 
     # -------------------------------
     # 외부 인터페이스
@@ -332,13 +345,12 @@ class AnalysisApp:
             </html>
             '''
 
-    def start_server(self, host="0.0.0.0", port=5000):
+    def start_server(self):
         # Flask debug=False 필수(스레드용)
-        th = threading.Thread(target=self.app.run, kwargs={
-            "host": host, "port": port, "debug": False, "threaded": True, "use_reloader": False
+        self.server_thread = threading.Thread(target=self.app.run, kwargs={
+            "host": self.host, "port": self.port, "debug": False, "threaded": True, "use_reloader": False
         }, daemon=True)
-        th.start()
-        return th
+        self.server_thread.start()
 
     # -------------------------------
     # 유틸
