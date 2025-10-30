@@ -31,7 +31,7 @@ try:
         file_names = ['analysis', 'Crane_MQTT', 'CraneDataSimulatorWorker', 
                       'koceti_485_Read_Modbus', 'koceti_Read_Modbus', 'modbus_worker', 
                       'processor', 'send_ip', 'shared_state', 
-                      'test'
+                      'test', 'cloudflare_test'
                       ]
         for name in file_names:
             try:
