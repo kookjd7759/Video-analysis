@@ -29,11 +29,11 @@ class modbus_worker:
                     start = time.time()
                     ts = datetime.now().strftime("%H:%M:%S")
 
-                    final_data = self.crane_tester.get_stability_data(STABILITY_SENSOR_ID)
+                    final_data = self.crane_tester.get_read_once(STABILITY_SENSOR_ID)
                     if final_data is None:
                         print(f"[{ts}] 사이클 실패 (응답 오류 또는 예외)")
                     else:
-                        #print(f"[{ts}] 사이클 OK")
+                        print(f"[{ts}] 사이클 OK")
                         self.data_queue.put(final_data)
                         risk_assessment = final_data.get("risk_assessment", {})
                         risk_level = risk_assessment.get("level_num", 0)
@@ -94,7 +94,7 @@ if __name__ == "__main__":
     # 3. 외부 shutdown_event 불필요
     
     # 3. 워커 생성 시에도 전달하지 않음
-    worker = modbus_worker('COM6', results_queue, period_sec=1.0)
+    worker = modbus_worker('/dev/ttyUSB0', results_queue, period_sec=1.0)
     try:
         print("[INFO] 1초 주기 폴링 시작 (종료: Ctrl+C)")
         worker.start()

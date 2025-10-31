@@ -20,7 +20,7 @@ final_data_queue = queue.Queue()
 shared_state = SharedState()
 # 2. 각 워커 객체 생성. 'shared_state'를 공통으로 전달합니다.
 modbus_poller = modbus_worker(
-    port='COM6', 
+    port='/dev/ttyUSB0', 
     data_queue=final_data_queue, 
     period_sec=1.0
 )

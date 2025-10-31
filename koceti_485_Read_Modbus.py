@@ -2,7 +2,7 @@ from pymodbus.client.sync import ModbusSerialClient
 
 client = ModbusSerialClient(
     method='rtu',
-    port='COM6',
+    port='/dev/ttyUSB0',
     baudrate=115200,
     parity='N',
     stopbits=1,

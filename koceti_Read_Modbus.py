@@ -4,7 +4,7 @@ from pymodbus.constants import Endian
 from pymodbus.client.sync import ModbusSerialClient
 
 class Crane_Final_Test:
-    def __init__(self, port='COM6', baudrate=115200, timeout=1):
+    def __init__(self, port='/dev/ttyUSB0', baudrate=115200, timeout=1):
         print(f"Modbus 클라이언트 초기화: 포트={port}, 속도={baudrate}")
         self.client = ModbusSerialClient(
             method='rtu',
@@ -150,7 +150,7 @@ class Crane_Final_Test:
             
 """
 if __name__ == "__main__":    
-    crane_tester = Crane_Final_Test(port='COM6')
+    crane_tester = Crane_Final_Test(port='/dev/ttyUSB0')
     
     # 2. 장비에 연결
     if crane_tester.connect():
