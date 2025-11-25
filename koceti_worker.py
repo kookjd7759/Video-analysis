@@ -21,62 +21,81 @@ class koceti_worker:
         
     def _run(self):
         try:
-            # 각 장비의 Unit ID를 변수로 지정 (실제 ID로 변경해야 합니다)
+            # 각 장비의 Unit ID를 변수로 지정 (실제 ID로 변경 가능)
             STABILITY_SENSOR_ID = 1
-            MAIN_CRANE_ID = 2    
-            # 1. [Server 시작] 메인 크레인 데이터 수신용 서버를 먼저 켭니다. (백그라운드)
+            MAIN_CRANE_ID = 2    # 지금은 안 쓰지만 의미상 유지
+
+            # 1. 메인 크레인 데이터 수신용 서버 시작
             self.crane_tester.start_main_crane_server(port=self.main_crane_port)
-            if self.crane_tester.connect_safety():
-                while not self._stop.is_set():
-                    start = time.time()
-                    ts = datetime.now().strftime("%H:%M:%S")
 
-                    final_data = self.crane_tester.get_safety_sensor_data(STABILITY_SENSOR_ID)
-                    if final_data is None:
-                        print(f"[{ts}] 사이클 실패 (응답 오류 또는 예외)")
-                    else:
-                        print(f"[{ts}] 사이클 OK")
-                        self.data_queue.put(final_data)
-                        risk_assessment = final_data.get("risk_assessment", {})
-                        risk_level = risk_assessment.get("level_num", 0)
-                        self.shared_state.set_danger_level(risk_level)
-                    
-                    # 2. 크레인 메인 컨트롤러 데이터 요청
-                    main_data = self.crane_tester.get_main_crane_data()
-                    if main_data:
-                        print(f"[메인 크레인 ID:{MAIN_CRANE_ID}] 수신 데이터: {main_data}")
-                        boom_length = main_data.get("boom length(m)", 0)
-                        self.shared_state.set_boom_length(boom_length)
-                        boom_angle = main_data.get("boom angle(deg)", 0)
-                        self.shared_state.set_boom_angle(boom_angle)
-                        weight = main_data.get("weight(ton)", 0)
-                        self.shared_state.set_weight(weight)
-                        engine_speed = main_data.get("engine speed(rpm)", 0)
-                        self.shared_state.set_engine_speed(engine_speed)
-                        wind_speed = main_data.get("wind speed(m/s)", 0)
-                        self.shared_state.set_wind_speed(wind_speed)
-                        swing_angle = main_data.get("swing angle(deg)", 0)
-                        self.shared_state.set_swing_angle(swing_angle)
-
-                    else:
-                        print(f"[메인 크레인 ID:{MAIN_CRANE_ID}] 데이터 수신 실패.")
-                    
-                    # 1초 간격
-                    elapsed = time.time() - start
-                    remain = self.period_sec - elapsed
-                    if remain > 0:
-                        end = time.time() + remain
-                        while not self._stop.is_set() and time.time() < end:
-                            time.sleep(0.1)
-            else:
+            # 2. 안전센서 쪽 Modbus 접속
+            if not self.crane_tester.connect_safety():
                 print("[Worker] [ERROR] 연결 실패. 쓰레드를 종료합니다.")
-                # (선택) 큐에 에러 메시지를 넣어 메인 쓰레드에 알릴 수도 있습니다.
                 self.data_queue.put({"error": f"연결 실패: {self.safety_port} 포트를 확인하세요."})
                 return
+
+            # 3. 주기 루프
+            while not self._stop.is_set():
+                start = time.time()
+                ts = datetime.now().strftime("%H:%M:%S")
+
+                # --- 3-1. 안전센서 데이터 ---
+                final_data = self.crane_tester.get_safety_sensor_data(STABILITY_SENSOR_ID)
+                if final_data is None:
+                    print(f"[{ts}][WORKER] 사이클 실패 (안전센서 응답 오류 또는 예외)")
+                else:
+                    print(f"[{ts}][WORKER] 사이클 OK")
+                    print(f"[{ts}][WORKER][SAFETY] raw={final_data.get('raw')}")
+                    print(f"[{ts}][WORKER][SAFETY] risk={final_data.get('risk_assessment')}")
+
+                    # 큐로 전달
+                    self.data_queue.put(final_data)
+
+                    # shared_state 위험도 갱신
+                    risk_assessment = final_data.get("risk_assessment", {})
+                    risk_level = risk_assessment.get("level_num", 0)
+                    self.shared_state.set_danger_level(risk_level)
+                    print(f"[{ts}][WORKER][STATE] danger_level -> {risk_level}")
+
+                # --- 3-2. 메인 크레인 데이터 ---
+                main_data = self.crane_tester.get_main_crane_data()
+                if main_data:
+                    print(f"[{ts}][WORKER][MAIN RAW] {main_data}")
+
+                    boom_length = main_data.get("boom length(m)", 0)
+                    boom_angle = main_data.get("boom angle(deg)", 0)
+                    weight = main_data.get("weight(ton)", 0)
+                    engine_speed = main_data.get("engine speed(rpm)", 0)
+                    wind_speed = main_data.get("wind speed(m/s)", 0)
+                    swing_angle = main_data.get("swing angle(deg)", 0)
+
+                    # shared_state에 저장
+                    self.shared_state.set_boom_length(boom_length)
+                    self.shared_state.set_boom_angle(boom_angle)
+                    self.shared_state.set_weight(weight)
+                    self.shared_state.set_engine_speed(engine_speed)
+                    self.shared_state.set_wind_speed(wind_speed)
+                    self.shared_state.set_swing_angle(swing_angle)
+
+                    print(
+                        f"[{ts}][WORKER][STATE] boom_length={boom_length}, boom_angle={boom_angle}, "
+                        f"weight={weight}, engine_speed={engine_speed}, "
+                        f"wind_speed={wind_speed}, swing_angle={swing_angle}"
+                    )
+                else:
+                    print(f"[{ts}][WORKER][MAIN] 메인 크레인 데이터 수신 실패.")
+
+                # --- 3-3. 주기 맞추기 ---
+                elapsed = time.time() - start
+                remain = self.period_sec - elapsed
+                if remain > 0:
+                    end = time.time() + remain
+                    while not self._stop.is_set() and time.time() < end:
+                        time.sleep(0.1)
         finally:
             self.crane_tester.close_safety()
             print("[Worker] 연결이 안전하게 종료되었습니다.")
-  
+ 
     
     def start(self, daemon=True):
         if self._th and self._th.is_alive():

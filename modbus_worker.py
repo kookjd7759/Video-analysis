@@ -19,6 +19,7 @@ class modbus_worker:
         # 1. Crane_Final_Test 객체를 '쓰레드 안에서' 생성하고 연결합니다.
         self.crane_tester = Crane_Final_Test(port=self.port)
         self.shared_state = SharedState()
+
     def _run(self):
         try:
             # 각 장비의 Unit ID를 변수로 지정 (실제 ID로 변경해야 합니다)

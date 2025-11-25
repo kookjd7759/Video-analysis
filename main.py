@@ -51,14 +51,18 @@ try:
     while True:
         try:
             integrated_data = final_data_queue.get(timeout=2.0)
-            print(app.get_current_detections_list())
-            #time.sleep(0.2)
+            print("[Main][QUEUE] integrated_data:", integrated_data)
+
+            detections = app.get_current_detections_list()
+            print("[Main][DETECT] current detections:", detections)
+
         except queue.Empty:
             # 워커들이 살아있는지 확인
             if not koceti_poller._th.is_alive() or not data_simulator._th.is_alive():
                 print("[Main] [ERROR] 하나 이상의 워커 쓰레드가 중지되었습니다.")
                 break
             continue
+
             
 except KeyboardInterrupt:
     print("\n[Main] 종료 요청 수신.")

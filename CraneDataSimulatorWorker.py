@@ -46,105 +46,83 @@ class CraneDataSimulatorWorker:
         # MQTT 클라이언트와 같은 내부 객체는 여기서 생성합니다.
         self.mqtt = MQTTClient()
         self.shared_state =shared_state
+    
     def _run(self):
-        """
-        백그라운드 쓰레드에서 실행될 메인 로직.
-        기존 main() 함수의 while 루프가 여기에 들어옵니다.
-        """
-        print("[Worker] 데이터 시뮬레이터 쓰레드 시작.")
-        
-        # --- MQTT 연결 및 루프 시작 ---
-        self.mqtt.connecting()
-        self.mqtt.loop_start()
         try:
-            # --- 메인 루프 ---
+            # 각 장비의 Unit ID를 변수로 지정 (실제 ID로 변경 가능)
+            STABILITY_SENSOR_ID = 1
+            MAIN_CRANE_ID = 2    # 지금은 안 쓰지만 의미상 유지
+
+            # 1. 메인 크레인 데이터 수신용 서버 시작
+            self.crane_tester.start_main_crane_server(port=self.main_crane_port)
+
+            # 2. 안전센서 쪽 Modbus 접속
+            if not self.crane_tester.connect_safety():
+                print("[Worker] [ERROR] 연결 실패. 쓰레드를 종료합니다.")
+                self.data_queue.put({"error": f"연결 실패: {self.safety_port} 포트를 확인하세요."})
+                return
+
+            # 3. 주기 루프
             while not self._stop.is_set():
                 start = time.time()
-                
-                # 1. MQTT 메시지 수신 및 처리
-                msg = self.mqtt.get_message()
-                if msg is not None:
-                    try:
-                        jsonObject = json.loads(msg)
-                        self.angle = jsonObject.get('INCLINATION_X', [0])[0] / 100
-                    except (TypeError, json.JSONDecodeError) as e:
-                        print(f"Error decoding JSON: {e}")
-                        continue                
-                
-                self.boom_length = self.shared_state.get_boom_length()
-                self.actual_load = random.uniform(2990.0,3010.0)
-                self.fluid_temp =  random.uniform(99.1,199.1) #작동유 온도
-                self.STATUS1 = 0#STATUS1
-                self.STATUS2 = 0#STATUS2
-                self.STATUS3 = 0#STATUS3(예비)
-                    
-                self.voltage = random.uniform(23.9,24.9) # 축전지 전압
-                self.MAIN_HEIGHT = 0
-                self.spec = 9999#제원
-                self.engine_rpm = self.shared_state.get_engine_speed()
-                self.AUX_HEIGHT = 0#AUX HEIGHT
-                self.wind = self.shared_state.get_wind_speed()
-                self.MAIN_radius1 = 0#반경1 MAIN
-                self.engine_temp = random.randint(100,200)
-                self.RD_HEIGHT = random.randint(0, 4000)
-                self.turning_angle =random.randint(0,10)
-                self.turning_speed = random.randint(0,10)
-                self.AUX_radius2 = random.randint(0,10)
-                self.oil_pressure = random.randint(200,1600)
-                self.body_angle = random.randint(0,360) # 하체 각도
-                self.boom_angle = self.shared_state.get_boom_angle()
-                self.X1 = random.uniform(0.0, 10.0) #장애물 위치
-                self.X2 = random.uniform(0.0, 10.0)
-                self.Y1 = random.uniform(0.0, 10.0)
-                self.Y2 = random.uniform(0.0, 10.0)
-                self.danger = self.shared_state.get_danger_level()
-                
-                # 3. 최종 데이터 딕셔너리 생성
-                message = {"boom_length":self.boom_length,
-                           "actual_load":self.actual_load,
-                           "fluid_temp":self.fluid_temp,
-                           "STATUS1":self.STATUS1,
-                           "STATUS2":self.STATUS2,
-                           "STATUS3":self.STATUS3,
-                           "angle":self.angle,
-                           "voltage":self.voltage,
-                           "MAIN_HEIGHT":self.MAIN_HEIGHT,
-                           "spec":self.spec,
-                           "engine_rpm":self.engine_rpm,
-                           "AUX_HEIGHT":self.AUX_HEIGHT,
-                           "wind":self.wind,
-                           "MAIN_radius1":self.MAIN_radius1,
-                           "engine_temp":self.engine_temp,
-                           "RD_HEIGHT":self.RD_HEIGHT,
-                           "turning_angle":self.turning_angle,
-                           "turning_speed":self.turning_speed,
-                           "AUX_radius2":self.AUX_radius2,
-                           "oil_pressure":self.oil_pressure,
-                           "body_angle":self.body_angle,
-                           "boom_angle":self.boom_angle,
-                           "X1":self.X1,
-                           "Y1":self.Y1,
-                           "X2":self.X2,
-                           "Y2":self.Y2,
-                           "danger":self.danger
-                        }
-                
-                # 4. ★★ 가장 중요한 부분: 생성된 데이터를 큐에 넣습니다! ★★
-                self.data_queue.put(message)
-                self.mqtt.Analysis_msg('Event/CraneTest/', json.dumps(message))
-                
-                # 5. 정확한 주기 제어
+                ts = datetime.now().strftime("%H:%M:%S")
+
+                # --- 3-1. 안전센서 데이터 ---
+                final_data = self.crane_tester.get_safety_sensor_data(STABILITY_SENSOR_ID)
+                if final_data is None:
+                    print(f"[{ts}][WORKER] 사이클 실패 (안전센서 응답 오류 또는 예외)")
+                else:
+                    print(f"[{ts}][WORKER] 사이클 OK")
+                    print(f"[{ts}][WORKER][SAFETY] raw={final_data.get('raw')}")
+                    print(f"[{ts}][WORKER][SAFETY] risk={final_data.get('risk_assessment')}")
+
+                    # 큐로 전달
+                    self.data_queue.put(final_data)
+
+                    # shared_state 위험도 갱신
+                    risk_assessment = final_data.get("risk_assessment", {})
+                    risk_level = risk_assessment.get("level_num", 0)
+                    self.shared_state.set_danger_level(risk_level)
+                    print(f"[{ts}][WORKER][STATE] danger_level -> {risk_level}")
+
+                # --- 3-2. 메인 크레인 데이터 ---
+                main_data = self.crane_tester.get_main_crane_data()
+                if main_data:
+                    print(f"[{ts}][WORKER][MAIN RAW] {main_data}")
+
+                    boom_length = main_data.get("boom length(m)", 0)
+                    boom_angle = main_data.get("boom angle(deg)", 0)
+                    weight = main_data.get("weight(ton)", 0)
+                    engine_speed = main_data.get("engine speed(rpm)", 0)
+                    wind_speed = main_data.get("wind speed(m/s)", 0)
+                    swing_angle = main_data.get("swing angle(deg)", 0)
+
+                    # shared_state에 저장
+                    self.shared_state.set_boom_length(boom_length)
+                    self.shared_state.set_boom_angle(boom_angle)
+                    self.shared_state.set_weight(weight)
+                    self.shared_state.set_engine_speed(engine_speed)
+                    self.shared_state.set_wind_speed(wind_speed)
+                    self.shared_state.set_swing_angle(swing_angle)
+
+                    print(
+                        f"[{ts}][WORKER][STATE] boom_length={boom_length}, boom_angle={boom_angle}, "
+                        f"weight={weight}, engine_speed={engine_speed}, "
+                        f"wind_speed={wind_speed}, swing_angle={swing_angle}"
+                    )
+                else:
+                    print(f"[{ts}][WORKER][MAIN] 메인 크레인 데이터 수신 실패.")
+
+                # --- 3-3. 주기 맞추기 ---
                 elapsed = time.time() - start
                 remain = self.period_sec - elapsed
                 if remain > 0:
-                    self._stop.wait(remain)
-
+                    end = time.time() + remain
+                    while not self._stop.is_set() and time.time() < end:
+                        time.sleep(0.1)
         finally:
-            # 6. 쓰레드가 종료될 때 MQTT 리소스를 안전하게 정리합니다.
-            print("[Worker] MQTT 연결을 종료합니다.")
-            self.mqtt.loop_stop()
-            self.mqtt.disconnect()
-            print("[Worker] 데이터 시뮬레이터 쓰레드 종료.")
+            self.crane_tester.close_safety()
+            print("[Worker] 연결이 안전하게 종료되었습니다.")
 
     # --- start, stop, join 메소드는 modbus_worker와 동일 ---
     def start(self, daemon=True):

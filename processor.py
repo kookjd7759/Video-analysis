@@ -122,6 +122,7 @@ class YOLORealSenseProcessor:
         depth_frame = aligned.get_depth_frame()
         color_frame = aligned.get_color_frame()
         if not depth_frame or not color_frame:
+            print("[RS][WARN] depth_frame or color_frame is None")
             return None, []
 
         # 필터 적용
@@ -135,28 +136,33 @@ class YOLORealSenseProcessor:
         depth_img = np.asanyarray(depth_frame.get_data())
         H, W = color_img.shape[:2]
 
+        print(f"[RS][FRAME] color_shape={color_img.shape}, depth_shape={depth_img.shape}")
+
         # YOLO 추론 (사람만)
         with torch.inference_mode():
             result = self.model.predict(
-            source=color_img,
-            imgsz=self.imgsz,
-            conf=self.conf_threshold,
-            iou=self.iou_threshold,
-            max_det=self.max_det,
-            device=self.device,
-            classes=[0],
-            verbose=False,
-            augment=self.use_tta,
+                source=color_img,
+                imgsz=self.imgsz,
+                conf=self.conf_threshold,
+                iou=self.iou_threshold,
+                max_det=self.max_det,
+                device=self.device,
+                classes=[0],            # 사람 class만
+                verbose=False,
+                augment=self.use_tta,
             )[0]
 
-        boxes, scores, clses = [], [], []
-        for box in result.boxes:
-            x1, y1, x2, y2 = map(float, box.xyxy[0])
-            conf = float(box.conf[0])
-            cls_id = int(box.cls[0]) if hasattr(box, "cls") else 0
-            boxes.append([x1, y1, x2, y2])
-            scores.append(conf)
-            clses.append(cls_id)
+        if result is None or result.boxes is None:
+            return color_img, []
+
+        boxes = result.boxes.xyxy.detach().cpu().numpy()
+        scores = result.boxes.conf.detach().cpu().numpy()
+        clses = result.boxes.cls.detach().cpu().numpy()
+
+        mask = scores >= self.conf_threshold
+        boxes = boxes[mask]
+        scores = scores[mask]
+        clses = clses[mask]
 
         all_boxes = []
         detections = []
@@ -179,6 +185,10 @@ class YOLORealSenseProcessor:
                 "distance": round(d, 2),
                 "center": round(center_norm, 4)  # 소수 4자리 정도로
             })
+
+        print(f"[RS][DETECT] count={len(detections)}")
+        if detections:
+            print(f"[RS][DETECT SAMPLE] {detections[0]}")
 
         # 시각화(박스 + 라벨)
         for x1, y1, x2, y2, label, d, center_norm in all_boxes:
