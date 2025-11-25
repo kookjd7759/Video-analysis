@@ -1,12 +1,19 @@
 import time
+import threading
+import struct
+import logging
+#from pymodbus.client import ModbusSerialClient
+from pymodbus.client.sync import ModbusSerialClient
+from pymodbus.server.sync import ModbusSerialServer
+#from pymodbus.datastore import ModbusSequentialDataBlock, ModbusDeviceContext, ModbusServerContext
+from pymodbus.datastore import ModbusSequentialDataBlock, ModbusServerContext
 from pymodbus.payload import BinaryPayloadDecoder
 from pymodbus.constants import Endian
-from pymodbus.client.sync import ModbusSerialClient
 
 class Crane_Final_Test:
     def __init__(self, port='/dev/ttyUSB0', baudrate=115200, timeout=1):
         print(f"Modbus 클라이언트 초기화: 포트={port}, 속도={baudrate}")
-        self.client = ModbusSerialClient(
+        self.safety_client = ModbusSerialClient(
             method='rtu',
             port=port,
             baudrate=baudrate,
@@ -15,19 +22,31 @@ class Crane_Final_Test:
             bytesize=8,
             timeout=timeout
         )
-
-    def connect(self):
+        
+        # -------------------------------------------------------
+        # 2. [Server 설정] 메인 크레인용 (데이터 받는 용도)
+        # -------------------------------------------------------
+        # 메인 크레인 데이터가 저장될 메모리 (0~100번지)
+        self.server_store = ModbusSequentialDataBlock(address=0, values=[0]*100)
+        # Slave Context 생성 (Unit ID 1번이라고 가정)
+        self.server_context = ModbusServerContext(
+            slaves={2: self.server_store},
+            single=False
+        )
+        self.server_thread = None
+        
+    def connect_safety(self):
         print("장비에 연결을 시도합니다...")
-        if self.client.connect():
+        if self.safety_client.connect():
             print("연결 성공!")
             return True
         else:
             print("[ERROR] 장비에 연결할 수 없습니다. 포트와 연결 상태를 확인하세요.")
             return False
 
-    def close(self):
+    def close_safety(self):
         print("연결을 종료합니다.")
-        self.client.close()
+        self.safety_client.close()
         
     # --- 환산 함수들은 그대로 유지 ---
     def overturn_stability(self, val):
@@ -53,16 +72,16 @@ class Crane_Final_Test:
         else:
             return {"level_num": 3, "level_str": "위험", "color": "red", "message": "전복 위험! 즉시 모든 작업을 중단하십시오!"}
                         
-    def get_read_once(self, unit_id):
+    def get_safety_sensor_data(self, unit_id):
         """
         '최신' 데이터를 장비로부터 읽어와서 처리하고, 결과 딕셔너리를 반환합니다.
         """
-        if not self.client.is_socket_open():
-            print("[ERROR] 장비에 연결되어 있지 않습니다. 먼저 connect()를 호출하세요.")
-            return None # 연결이 안되어 있으면 None 반환
+        if not self.safety_client.is_socket_open():
+            print("[ERROR] 장비에 연결되어 있지 않습니다. 먼저 connect_safety()를 호출하세요.")
+            return None  # 연결이 안되어 있으면 None 반환
             
         # 1. 데이터를 '여기서' 실시간으로 읽습니다.
-        response = self.client.read_holding_registers(address=0, count=7, unit=unit_id)
+        response = self.safety_client.read_holding_registers(address=0, count=7, unit=unit_id)
         
         # 2. 응답에 에러가 있는지 확인합니다.
         if response.isError():
@@ -95,57 +114,94 @@ class Crane_Final_Test:
         # 4. 처리된 결과를 반환하여 다른 곳에서 사용할 수 있도록 합니다.
         return final_result
 
-    def get_main_crane_data(self, unit_id):
-        """
-        크레인 메인 컨트롤러(Unit ID)로부터 32비트 데이터를 읽어옵니다.
-        """
-        if not self.client.is_socket_open():
-            print("[ERROR] 장비에 연결되어 있지 않습니다.")
-            return None
+    # --- [기능 2] 메인 크레인 서버 구동 및 데이터 읽기 (Server) ---
+    def start_main_crane_server(self, port):
+        """메인 크레인용 서버를 별도 쓰레드로 시작"""
+        if self.server_thread is not None:
+            return
+
+        def _server_runner():
+            try:
+                print(f"[Server] 메인 크레인 수신 대기 중... (Port: {port})")
+                server = ModbusSerialServer(
+                    context=self.server_context,
+                    port=port,
+                    baudrate=115200,
+                    bytesize=8,
+                    parity='N',
+                    stopbits=1
+                )
+                server.serve_forever()
+            except Exception as e:
+                print(f"[Server Error] {e}")
+
+        self.server_thread = threading.Thread(target=_server_runner, daemon=True)
+        self.server_thread.start()
         
+    def get_main_crane_data(self):
+        # --- [수정된 함수 2] 메인 크레인 데이터 (Unit ID 2) ---
+        # 통신 요청(read) 대신 -> 메모리 조회(getValues)로 변경
+        """Unit ID 2번 메모리(self.store_2)에서 데이터를 꺼내옴"""
         try:
-            # 여러 주소의 데이터를 읽어야 하므로, 필요한 만큼 read 함수를 호출합니다.
-            # 예: 붐 길이(2), 붐 각도(4), 인양 중량(12)
-            
-            # 붐 길이(add 2, len 2)와 붐 각도(add 4, len 2) 읽기
-            res_boom = self.client.read_holding_registers(address=2, count=4, unit=unit_id)
-            if res_boom.isError(): return None # 에러 시 함수 종료
-            
-            # 인양 중량(add 12, len 2) 읽기
-            res_weight = self.client.read_holding_registers(address=12, count=2, unit=unit_id)
-            if res_weight.isError(): return None
+            # 필요한 전체 범위 데이터를 한 번에 가져옵니다 (0~40번지 정도면 충분)
+            # store_2는 리스트 형태입니다.
+            all_regs = self.server_store.getValues(address=0, count=50)
 
-            # 엔진 속도(add 16, len 2) 읽기
-            engine_rpm = self.client.read_holding_registers(address=16, count=2, unit=unit_id)
-            if engine_rpm.isError(): return None
+            # BinaryPayloadDecoder.fromRegisters는 리스트를 입력으로 받으므로
+            # 기존 로직과 유사하게 사용할 수 있습니다.
+            
+            # 1. 붐 길이 (Address 2, Count 2) + 붐 각도 (Address 4, Count 2)
+            # all_regs[2:6] -> 2, 3, 4, 5번지 (총 4개 레지스터)
+            decoder_boom = BinaryPayloadDecoder.fromRegisters(
+                all_regs[2:6], 
+                byteorder=Endian.Little, 
+                wordorder=Endian.Little
+            )
+            boom_length = round(decoder_boom.decode_32bit_float(), 2)
+            boom_angle = round(decoder_boom.decode_32bit_float(), 2)
 
-            # 바람 속도(add 34, len 2) 읽기
-            wind_rpm = self.client.read_holding_registers(address=34, count=2, unit=unit_id)
-            if wind_rpm.isError(): return None
-            
-            # 스윙 각도(add 38, len 2) 읽기
-            swing_angle = self.client.read_holding_registers(address=38, count=2, unit=unit_id)
-            if swing_angle.isError(): return None
-                                                
-            # 32비트 실수(float)로 변환
-            # Byte Order는 이미지에 명시된 'little endian'으로 설정
-            decoder_boom = BinaryPayloadDecoder.fromRegisters(res_boom.registers, byteorder=Endian.Little)
-            decoder_weight = BinaryPayloadDecoder.fromRegisters(res_weight.registers, byteorder=Endian.Little)
-            
-            decoder_rpm = BinaryPayloadDecoder.fromRegisters(engine_rpm.registers, byteorder=Endian.Little)
-            decoder_wind = BinaryPayloadDecoder.fromRegisters(wind_rpm.registers, byteorder=Endian.Little)
-            decoder_swing = BinaryPayloadDecoder.fromRegisters(swing_angle.registers, byteorder=Endian.Little)
-            results = {
-                "boom length(m)": round(decoder_boom.decode_32bit_float(), 2),
-                "boom angle(deg)": round(decoder_boom.decode_32bit_float(), 2),
-                "weight(ton)": round(decoder_weight.decode_32bit_float(), 2),
-                "engine speed(rpm)": round(decoder_rpm.decode_32bit_float(), 2),
-                "wind speed(m/s)": round(decoder_wind.decode_32bit_float(), 2),
-                "swing angle(deg)": round(decoder_swing.decode_32bit_float(), 2)
+            # 2. 인양 중량 (Address 12, Count 2)
+            decoder_weight = BinaryPayloadDecoder.fromRegisters(
+                all_regs[12:14], 
+                byteorder=Endian.Little, 
+                wordorder=Endian.Little
+            )
+            weight = round(decoder_weight.decode_32bit_float(), 2)
+
+            # 3. 엔진 속도 (Address 16, Count 2)
+            decoder_rpm = BinaryPayloadDecoder.fromRegisters(
+                all_regs[16:18], 
+                byteorder=Endian.Little, 
+                wordorder=Endian.Little
+            )
+            rpm = round(decoder_rpm.decode_32bit_float(), 2)
+
+            # 4. 풍속 (Address 34, Count 2)
+            decoder_wind = BinaryPayloadDecoder.fromRegisters(
+                all_regs[34:36], 
+                byteorder=Endian.Little, 
+                wordorder=Endian.Little
+            )
+            wind = round(decoder_wind.decode_32bit_float(), 2)
+
+            # 5. 스윙 각도 (Address 38, Count 2)
+            decoder_swing = BinaryPayloadDecoder.fromRegisters(
+                all_regs[38:40], 
+                byteorder=Endian.Little, 
+                wordorder=Endian.Little
+            )
+            swing = round(decoder_swing.decode_32bit_float(), 2)
+
+            return {
+                "boom length(m)": boom_length,
+                "boom angle(deg)": boom_angle,
+                "weight(ton)": weight,
+                "engine speed(rpm)": rpm,
+                "wind speed(m/s)": wind,
+                "swing angle(deg)": swing
             }
-            return results
         except Exception as e:
-            print(f"메인 크레인(ID:{unit_id}) 데이터 처리 중 오류: {e}")
+            print(f"[Data Error] 데이터 해석 중 오류: {e}")
             return None
             
 """

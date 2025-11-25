@@ -8,7 +8,7 @@ from Crane_MQTT import MQTTClient # Crane_MQTT.py 파일이 있다고 가정
 from shared_state import SharedState
 
 class CraneDataSimulatorWorker:
-    def __init__(self, data_queue, period_sec=0.3):
+    def __init__(self, data_queue,shared_state, period_sec=0.3):
         # 시뮬레이션 할 데이터 를 정의 합니다.
         #각도, 축전지 전압, MAIN HEIGHT, STATUS3(예비), 제원, 엔진 RPM, AUX HEIGHT, 풍속/풍향, 반경1 MAIN, 엔진 온도, 3RD HEIGHT, 선회각도/속도, 반경2 AUX, 엔진 오일압력, STATUS1, 하체 각도, 붐 각도
         self.boom_length = 0.00 # 붐 길이
@@ -45,7 +45,7 @@ class CraneDataSimulatorWorker:
 
         # MQTT 클라이언트와 같은 내부 객체는 여기서 생성합니다.
         self.mqtt = MQTTClient()
-        self.shared_state = SharedState()
+        self.shared_state =shared_state
     def _run(self):
         """
         백그라운드 쓰레드에서 실행될 메인 로직.
