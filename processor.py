@@ -4,6 +4,7 @@ import pyrealsense2 as rs
 import numpy as np
 import cv2
 import torch
+import math
 from ultralytics import YOLO
 
 # [추가] 양자화 도구 임포트
@@ -42,15 +43,9 @@ class YOLORealSenseProcessor:
         
         # 2. 일반 ONNX 모델이 없으면 먼저 생성 (pt -> onnx)
         if not os.path.exists(ncnn_path):
-            print("➡ ONNX 변환 중... (pt -> onnx)")
-            # 주의: 변수에 저장되는 경로는 return 값 활용
             ncnn_path = YOLO(model_path).export(format='ncnn', half=True)
-            self.model = YOLO(ncnn_path)
-        try:
-            # 장치 지정 (GPU 사용 시 정확도 및 속도 향상)
-            self.model.to(self.device)
-        except Exception:
-            pass
+        self.model = YOLO(ncnn_path)   # ✅ 항상 로드
+
 
         # 추론 파라미터
         self.conf_threshold = conf_threshold
@@ -68,6 +63,10 @@ class YOLORealSenseProcessor:
         config.enable_stream(rs.stream.depth, 640, 360, rs.format.z16, target_fps)
         config.enable_stream(rs.stream.color, 640, 360, rs.format.bgr8, target_fps)
         self.profile = self.pipeline.start(config)
+        color_stream = self.profile.get_stream(rs.stream.color).as_video_stream_profile()
+        intr = color_stream.get_intrinsics()
+        self.fy = float(intr.fy)
+        self.person_h_m = 1.7
 
         sensor = self.profile.get_device().first_depth_sensor()
         self.depth_scale = sensor.get_depth_scale()
@@ -130,10 +129,16 @@ class YOLORealSenseProcessor:
         return float(closest.mean())
 
     def _estimate_distance_from_bbox(self, x1, y1, x2, y2):
-        w = max(1, (x2 - x1))
-        h = max(1, (y2 - y1))
+        h_px = max(1, (y2 - y1))
+        fy = getattr(self, "fy", None)
+        if fy is None or fy <= 0:
+            return 0.0
 
-        return 1000 / (w + h) * 0.8 # 임시 값
+        Z = (self.person_h_m * fy) / float(h_px)
+
+        Z = float(np.clip(Z, 0.3, 80.0))
+        return 0.2 * math.log1p(math.exp(Z / 0.2))
+
 
     def get_frame(self, return_depth_vis=False):
         frames = self.pipeline.wait_for_frames()
