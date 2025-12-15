@@ -130,14 +130,10 @@ class YOLORealSenseProcessor:
         return float(closest.mean())
 
     def _estimate_distance_from_bbox(self, x1, y1, x2, y2):
-        h_px = max(1, (y2 - y1))
+        w = max(1, (x2 - x1))
+        h = max(1, (y2 - y1))
 
-        K = 360.0
-
-        d = K / float(h_px)
-
-        d = float(np.clip(d, 0.5, 50.0))
-        return d
+        return 1000 / (w + h) # 임시 값
 
     def get_frame(self, return_depth_vis=False):
         frames = self.pipeline.wait_for_frames()
@@ -161,15 +157,15 @@ class YOLORealSenseProcessor:
         # YOLO 추론 (사람만)
         with torch.inference_mode():
             result = self.model.predict(
-            source=color_img,
-            imgsz=self.imgsz,
-            conf=self.conf_threshold,
-            iou=self.iou_threshold,
-            max_det=self.max_det,
-            device=self.device,
-            classes=[0],
-            verbose=False,
-            augment=self.use_tta,
+                source=color_img,
+                imgsz=self.imgsz,
+                conf=self.conf_threshold,
+                iou=self.iou_threshold,
+                max_det=self.max_det,
+                device=self.device,
+                classes=[0],
+                verbose=False,
+                augment=self.use_tta,
             )[0]
 
         boxes, scores, clses = [], [], []
@@ -185,31 +181,71 @@ class YOLORealSenseProcessor:
         detections = []
 
         names_map = result.names if hasattr(result, "names") else {}
+
         for (x1, y1, x2, y2), _conf, cls_id in zip(boxes, scores, clses):
             x1, y1, x2, y2 = map(int, (x1, y1, x2, y2))
             label = names_map.get(cls_id, "obj")
 
-            # 거리 계산
-            d = self._distance_from_roi_closest40_mean(depth_img, x1, y1, x2, y2)
+            # bbox 크기
+            w = max(1, (x2 - x1))
+            h = max(1, (y2 - y1))
+
+            # 거리 계산 (depth 기반)
+            d_depth = self._distance_from_roi_closest10_mean(depth_img, x1, y1, x2, y2)
+
+            # ✅ 추정거리(bbox 기반)는 항상 계산
+            d_est = self._estimate_distance_from_bbox(x1, y1, x2, y2)
+
+            # depth 거리 유효성 판단
+            depth_valid = (
+                d_depth is not None
+                and np.isfinite(d_depth)
+                and float(d_depth) > 0.0
+            )
+
+            d_depth_out = round(float(d_depth), 2) if depth_valid else None
+            d_est_out = round(float(d_est), 2)
 
             # 중심 x 좌표 정규화 (0~1)
             xc = (x1 + x2) / 2.0
             center_norm = float(np.clip(xc / max(W, 1), 0.0, 1.0))
 
-            all_boxes.append((x1, y1, x2, y2, label, d, center_norm))
+            all_boxes.append((
+                x1, y1, x2, y2,
+                label,
+                d_depth_out,     # None 가능
+                d_est_out,       # 항상 숫자
+                w, h,
+                center_norm
+            ))
+
             detections.append({
                 "label": label,
-                "distance": round(d, 2),
-                "center": round(center_norm, 4)  # 소수 4자리 정도로
+
+                # depth 기반 거리(유효 시 숫자, 아니면 None)
+                "distance": d_depth_out,
+
+                # ✅ 항상 표시할 추정거리
+                "est_distance": d_est_out,
+
+                # ✅ UI 표시용 bbox 크기
+                "bbox_w": int(w),
+                "bbox_h": int(h),
+
+                "center": round(center_norm, 4)
             })
 
         # 시각화(박스 + 라벨)
-        for x1, y1, x2, y2, label, d, center_norm in all_boxes:
+        for x1, y1, x2, y2, label, d_depth_out, d_est_out, w, h, center_norm in all_boxes:
             color = (0, 255, 0)
-            txt = f"{label} ({d:.2f} m)"
+
+            depth_txt = f"{d_depth_out:.2f}m" if isinstance(d_depth_out, (int, float)) else "N/A"
+            txt = f"{label} depth:{depth_txt} est:{d_est_out:.2f}m w:{w} h:{h}"
+
             cv2.rectangle(color_img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(color_img, txt, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
         if return_depth_vis:
             # depth 시각화
             depth_m = depth_img.astype(np.float32) * self.depth_scale

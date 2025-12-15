@@ -286,11 +286,27 @@ class AnalysisApp:
             for o in lo:
                 if not isinstance(o, dict):
                     continue
-                dist = o.get("distance")
+
+                dist = o.get("distance")         # depth
+                est  = o.get("est_distance")     # bbox estimate
+                bw   = o.get("bbox_w")
+                bh   = o.get("bbox_h")
                 center = o.get("center")
-                if isinstance(dist, (int, float)) and isinstance(center, (int, float)):
-                    objs.append({"distance": round(float(dist), 2),
-                                 "center": round(float(center), 3)})
+                label  = o.get("label", "obj")
+
+                # center는 숫자만 통과
+                if not isinstance(center, (int, float)):
+                    continue
+
+                objs.append({
+                    "label": label,
+                    "distance": dist,                 # None 가능
+                    "est_distance": est,              # 항상 숫자여야 함(위에서 round로 넣음)
+                    "bbox_w": bw,
+                    "bbox_h": bh,
+                    "center": round(float(center), 3)
+                })
+
             return jsonify({"count": len(objs), "objects": objs})
 
         @app.route('/radar.png')
@@ -402,9 +418,27 @@ class AnalysisApp:
                     let lines = [];
                     lines.push(`[인지된 사람 수 : ${d.count}명]`);
                     (d.objects || []).forEach((o,i)=>{
-                      const dist = (typeof o.distance==='number' && isFinite(o.distance)) ? o.distance.toFixed(2)+' m' : 'N/A';
-                      const cx = (typeof o.center==='number' && isFinite(o.center)) ? o.center.toFixed(3) : 'N/A';
-                      lines.push(`${i+1}. 거리=${dist} | center=${cx}`);
+                    const dist =
+                        (typeof o.distance === 'number' && isFinite(o.distance))
+                        ? o.distance.toFixed(2) + ' m'
+                        : 'N/A'; // depth 거리
+
+                    const est =
+                        (typeof o.est_distance === 'number' && isFinite(o.est_distance))
+                        ? o.est_distance.toFixed(2) + ' m'
+                        : 'N/A'; // 추정거리(항상)
+
+                    const bw = (typeof o.bbox_w === 'number') ? o.bbox_w : 'N/A';
+                    const bh = (typeof o.bbox_h === 'number') ? o.bbox_h : 'N/A';
+
+                    const cx =
+                        (typeof o.center==='number' && isFinite(o.center))
+                        ? o.center.toFixed(3)
+                        : 'N/A';
+
+                    lines.push(
+                        `${i+1}. depth=${dist} | est=${est} | bbox(w,h)=(${bw},${bh}) | center=${cx}`
+                    );
                     });
                     document.getElementById('info').textContent = lines.join('\\n');
                   }catch(e){
