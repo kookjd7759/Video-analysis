@@ -137,7 +137,7 @@ class YOLORealSenseProcessor:
         Z = (self.person_h_m * fy) / float(h_px)
 
         Z = float(np.clip(Z, 0.3, 80.0))
-        return 0.2 * math.log1p(math.exp(Z / 0.2))
+        return Z - math.pow(1.2, Z)
 
 
     def get_frame(self, return_depth_vis=False):
