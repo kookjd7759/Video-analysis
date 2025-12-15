@@ -98,7 +98,7 @@ class YOLORealSenseProcessor:
         # self.hole_filling = rs.hole_filling_filter()
         # self.hole_filling.set_option(rs.option.holes_fill, 2)
 
-    def _distance_from_roi_closest10_mean(self, depth_img, x1, y1, x2, y2):
+    def _distance_from_roi_closest40_mean(self, depth_img, x1, y1, x2, y2):
         h, w = depth_img.shape[:2]
         x1_c, x2_c = np.clip([x1, x2], 0, w - 1)
         y1_c, y2_c = np.clip([y1, y2], 0, h - 1)
@@ -119,13 +119,13 @@ class YOLORealSenseProcessor:
 
         roi_m = roi_f * self.depth_scale
         # 근거리/원거리 노이즈 컷
-        mask = (roi_m >= 0.2) & (roi_m <= 10.0)
+        mask = (roi_m >= 0.1) & (roi_m <= 40.0)
         if not np.any(mask):
             return 0.0
         vals = roi_m[mask]
 
         k = max(1, int(0.10 * vals.size))
-        # np.partition은 이미 잘 쓰셨고, 다운샘플로 데이터량을 먼저 줄임
+        
         closest = np.partition(vals, k - 1)[:k]
         return float(closest.mean())
 
@@ -181,7 +181,7 @@ class YOLORealSenseProcessor:
             label = names_map.get(cls_id, "obj")
 
             # 거리 계산
-            d = self._distance_from_roi_closest10_mean(depth_img, x1, y1, x2, y2)
+            d = self._distance_from_roi_closest40_mean(depth_img, x1, y1, x2, y2)
 
             # 중심 x 좌표 정규화 (0~1)
             xc = (x1 + x2) / 2.0
