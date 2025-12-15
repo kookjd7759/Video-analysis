@@ -129,6 +129,15 @@ class YOLORealSenseProcessor:
         closest = np.partition(vals, k - 1)[:k]
         return float(closest.mean())
 
+    def _estimate_distance_from_bbox(self, x1, y1, x2, y2):
+        h_px = max(1, (y2 - y1))
+
+        K = 360.0
+
+        d = K / float(h_px)
+
+        d = float(np.clip(d, 0.5, 50.0))
+        return d
 
     def get_frame(self, return_depth_vis=False):
         frames = self.pipeline.wait_for_frames()
@@ -213,7 +222,7 @@ class YOLORealSenseProcessor:
             return combined, detections
         else:
             return color_img, detections
-        
+
     def stop(self):
         try:
             self.pipeline.stop()
