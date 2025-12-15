@@ -133,7 +133,7 @@ class YOLORealSenseProcessor:
         w = max(1, (x2 - x1))
         h = max(1, (y2 - y1))
 
-        return 1000 / (w + h) # 임시 값
+        return 1000 / (w + h) * 0.8 # 임시 값
 
     def get_frame(self, return_depth_vis=False):
         frames = self.pipeline.wait_for_frames()
@@ -191,7 +191,7 @@ class YOLORealSenseProcessor:
             h = max(1, (y2 - y1))
 
             # 거리 계산 (depth 기반)
-            d_depth = self._distance_from_roi_closest10_mean(depth_img, x1, y1, x2, y2)
+            d_depth = self._distance_from_roi_closest40_mean(depth_img, x1, y1, x2, y2)
 
             # ✅ 추정거리(bbox 기반)는 항상 계산
             d_est = self._estimate_distance_from_bbox(x1, y1, x2, y2)
@@ -240,7 +240,7 @@ class YOLORealSenseProcessor:
             color = (0, 255, 0)
 
             depth_txt = f"{d_depth_out:.2f}m" if isinstance(d_depth_out, (int, float)) else "N/A"
-            txt = f"{label} depth:{depth_txt} est:{d_est_out:.2f}m w:{w} h:{h}"
+            txt = f"depth:{depth_txt}"
 
             cv2.rectangle(color_img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(color_img, txt, (x1, y1 - 10),
