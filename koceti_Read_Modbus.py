@@ -2,37 +2,44 @@ import time
 import threading
 import struct
 import logging
-#from pymodbus.client import ModbusSerialClient
-from pymodbus.client.sync import ModbusSerialClient
-from pymodbus.server.sync import ModbusSerialServer
-#from pymodbus.datastore import ModbusSequentialDataBlock, ModbusDeviceContext, ModbusServerContext
-from pymodbus.datastore import ModbusSequentialDataBlock, ModbusServerContext
-from pymodbus.payload import BinaryPayloadDecoder
-from pymodbus.constants import Endian
+import socket
+
+from pymodbus.server import StartSerialServer
+from pymodbus.datastore import ModbusSequentialDataBlock
+from pymodbus.datastore import ModbusDeviceContext, ModbusServerContext
 
 class Crane_Final_Test:
-    def __init__(self, port='/dev/ttyUSB0', baudrate=115200, timeout=1):
-        print(f"Modbus 클라이언트 초기화: 포트={port}, 속도={baudrate}")
-        self.safety_client = ModbusSerialClient(
-            method='rtu',
-            port=port,
-            baudrate=baudrate,
-            parity='N',
-            stopbits=1,
-            bytesize=8,
-            timeout=timeout
-        )
+    def __init__(self, target_ip ="0.0.0.0", port=5005, timeout=1):
+        print(f"Modbus UDP 클라이언트 초기화: 주소={target_ip}, port={port}")
+        self.safety_client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        try:
+            # 0.0.0.0은 '내 컴퓨터의 모든 IP'를 의미, S
+            # port는 '장비가 데이터를 보내는 목적지 포트 번호'여야 함 (보통 받는 포트와 보내는 포트가 같으면 port 사용)
+            self.safety_client.bind(("0.0.0.0", port)) 
+            print(f"수신 대기 시작 (Bind): 192.168.0.10:{port}")
+        except Exception as e:
+            print(f"[주의] Bind 실패 (송신 전용이면 무시 가능): {e}")
+
+        # 2. 타임아웃 설정
+        self.safety_client.settimeout(3.0)
+        # 3. 타겟 정보 저장 (UDP는 연결 지향이 아니므로 보낼 때마다 주소가 필요함)
+        self.target_address = (target_ip, 5005) # (IP, Port) 튜플 형태
         
+        logging.basicConfig()
+        logger = logging.getLogger()
+        logger.setLevel(logging.INFO)
+
+        pymodbus_log = logging.getLogger("pymodbus")
+        pymodbus_log.setLevel(logging.CRITICAL)
         # -------------------------------------------------------
         # 2. [Server 설정] 메인 크레인용 (데이터 받는 용도)
         # -------------------------------------------------------
         # 메인 크레인 데이터가 저장될 메모리 (0~100번지)
-        self.server_store = ModbusSequentialDataBlock(address=0, values=[0]*100)
         # Slave Context 생성 (Unit ID 1번이라고 가정)
-        self.server_context = ModbusServerContext(
-            slaves={2: self.server_store},
-            single=False
-        )
+        self.server_store = ModbusSequentialDataBlock(address=0, values=[0] * 100)
+        slave_context = ModbusDeviceContext(hr=self.server_store)
+        self.server_context = ModbusServerContext(devices={2: slave_context}, single=False)
         self.server_thread = None
         
     def connect_safety(self):
@@ -70,55 +77,58 @@ class Crane_Final_Test:
         elif 25 <= stability_percentage < 50:
             return {"level_num": 2, "level_str": "경고", "color": "orange", "message": "위험 수준입니다. 작업 하중 및 반경을 재검토하세요."}
         else:
-            return {"level_num": 3, "level_str": "위험", "color": "red", "message": "전복 위험! 즉시 모든 작업을 중단하십시오!"}
+            return {"  ": 3, "level_str": "위험", "color": "red", "message": "전복 위험! 즉시 모든 작업을 중단하십시오!"}
                         
-    def get_safety_sensor_data(self, unit_id):
+    def get_safety_sensor_data(self, device_id):
         """
         '최신' 데이터를 장비로부터 읽어와서 처리하고, 결과 딕셔너리를 반환합니다.
         """
-        if not self.safety_client.is_socket_open():
-            print("[ERROR] 장비에 연결되어 있지 않습니다. 먼저 connect_safety()를 호출하세요.")
-            return None  # 연결이 안되어 있으면 None 반환
-
-        # 1. 데이터를 '여기서' 실시간으로 읽습니다.
-        response = self.safety_client.read_holding_registers(address=0, count=7, unit=unit_id)
-        print(f"[SAFETY][RAW] unit={unit_id}, response={response}")
-
-        # 2. 응답에 에러가 있는지 확인합니다.
-        if response.isError():
-            print(f"[ERROR] Modbus 응답 오류: {response}")
-            return None  # 에러 발생 시 None 반환
-
-        # 3. 에러가 없으면 값을 처리합니다.
-        raw_values = response.registers
-        print(f"[SAFETY][REGS] {raw_values}")
-
-        if raw_values is None or len(raw_values) < 7:
-            print(f"[ERROR] 레지스터 수가 부족합니다: {raw_values}")
+        if self.safety_client is None:
+            print("[ERROR] 소켓이 초기화되지 않았습니다.")
             return None
 
-        # 1. 먼저 안정도 값을 계산합니다.
-        stability_value = self.overturn_stability(raw_values[0])
-        print(f"[SAFETY][STABILITY] raw={raw_values[0]} -> {stability_value}%")
+        # 1. 데이터를 '여기서' 실시간으로 읽습니다.
+        response, addr = self.safety_client.recvfrom(1024)
+        print(f"[SAFETY][RAW] unit={addr}, response={response}")
 
-        # 2. 계산된 안정도 값을 이용해 위험도를 평가합니다.
-        risk_assessment = self.assess_stability_risk(stability_value)
-        print(f"[SAFETY][RISK] {risk_assessment}")
+        expected_length = 25 
+        if len(response) < expected_length:
+            print(f"[ERROR] 데이터 길이가 부족합니다. 수신: {len(response)}B, 예상: {expected_length}B")
+            return None
+
+        try:
+            # 25바이트만 잘라서 파싱
+            unpacked_data = struct.unpack('<6fB', response[:25])
+        except struct.error as e:
+            print(f"[ERROR] 데이터 파싱 실패: {e}")
+            return None
+        
+        left_lc_1 = unpacked_data[0]
+        left_lc_2 = unpacked_data[1]
+        left_lc_3 = unpacked_data[2]
+        right_lc_1 = unpacked_data[3]
+        right_lc_2 = unpacked_data[4]
+        right_lc_3 = unpacked_data[5]
+        roll_over_flag = unpacked_data[6] # 0: Normal, 1: Warning
+
+
+        #print(f"[SAFETY][RECV] L1={left_lc_1:.2f}, L2={left_lc_2:.2f}, L3={left_lc_3:.2f}")
+        #print(f"[SAFETY][RECV] R1={right_lc_1:.2f}, R2={right_lc_2:.2f}, R3={right_lc_3:.2f}")
+        #print(f"[SAFETY][RECV] Warning Level={roll_over_flag}")
 
         results = {
-            "크레인 전복 안정도 (%)": self.overturn_stability(raw_values[0]),
-            "무게 중심 위치 X축 (mm)": self.center_x(raw_values[1]),
-            "무게 중심 위치 Y축 (mm)": self.center_y(raw_values[2]),
-            "평균 부하 (전방) (Ton)": self.load(raw_values[3]),
-            "평균 부하 (후방) (Ton)": self.load(raw_values[4]),
-            "평균 부하 (우측) (Ton)": self.load(raw_values[5]),
-            "평균 부하 (좌측) (Ton)": self.load(raw_values[6]),
+            "left_lc_1": left_lc_1,
+            "left_lc_2": left_lc_2,
+            "left_lc_3": left_lc_3,
+            "right_lc_1": right_lc_1,
+            "right_lc_2": right_lc_2,
+            "right_lc_3": right_lc_3,
+            "roll_over_flag": roll_over_flag,
         }
-        print(f"[SAFETY][CONVERTED] {results}")
 
         final_result = {
             "raw": results,
-            "risk_assessment": risk_assessment
+            "risk_assessment": roll_over_flag
         }
         return final_result
 
@@ -131,81 +141,103 @@ class Crane_Final_Test:
         def _server_runner():
             try:
                 print(f"[Server] 메인 크레인 수신 대기 중... (Port: {port})")
-                server = ModbusSerialServer(
-                    context=self.server_context,
-                    port=port,
-                    baudrate=115200,
-                    bytesize=8,
-                    parity='N',
-                    stopbits=1
-                )
-                server.serve_forever()
+                StartSerialServer(context=self.server_context, port='/dev/ttyUSB0', baudrate=115200,  bytesize=8, parity='N', stopbits=1)
             except Exception as e:
                 print(f"[Server Error] {e}")
 
-        self.server_thread = threading.Thread(target=_server_runner, daemon=True)
-        self.server_thread.start()
-        
+        self.server_thread = threading.Thread(target=_server_runner)
+        self.server_thread.daemon = True
+        self.server_thread.start()  
+              
     def get_main_crane_data(self):
         """Unit ID 2번 메모리(self.server_store)에서 데이터를 꺼내옴"""
         try:
             # 필요한 전체 범위 데이터를 한 번에 가져옵니다 (0~40번지 정도면 충분)
-            all_regs = self.server_store.getValues(address=0, count=50)
-            print(f"[MAIN][RAW REGS 0~49] {all_regs}")
+            register_values = self.server_store.getValues(address=0, count=50)
 
-            if all_regs is None or len(all_regs) < 40:
-                print(f"[MAIN][ERROR] 레지스터 수가 부족합니다: {all_regs}")
+            if register_values is None or len(register_values) < 40:
+                print(f"[MAIN][ERROR] 레지스터 수가 부족합니다: {register_values}")
                 return None
 
-            # 1. 붐 길이 (Address 2, Count 2) + 붐 각도 (Address 4, Count 2)
-            decoder_boom = BinaryPayloadDecoder.fromRegisters(
-                all_regs[2:6],
-                byteorder=Endian.Little,
-                wordorder=Endian.Little
-            )
-            boom_length = round(decoder_boom.decode_32bit_float(), 2)
-            boom_angle = round(decoder_boom.decode_32bit_float(), 2)
+            packed_bytes = struct.pack('HH', register_values[3], register_values[2]) # 붐 길이
+            boom_length = struct.unpack('f', packed_bytes)[0]
 
-            # 2. 인양 중량 (Address 12, Count 2)
-            decoder_weight = BinaryPayloadDecoder.fromRegisters(
-                all_regs[12:14],
-                byteorder=Endian.Little,
-                wordorder=Endian.Little
-            )
-            weight = round(decoder_weight.decode_32bit_float(), 2)
+            packed_bytes = struct.pack('HH', register_values[5], register_values[4]) # 붐 각도
+            boom_angle = struct.unpack('f', packed_bytes)[0]
 
-            # 3. 엔진 속도 (Address 16, Count 2)
-            decoder_rpm = BinaryPayloadDecoder.fromRegisters(
-                all_regs[16:18],
-                byteorder=Endian.Little,
-                wordorder=Endian.Little
-            )
-            rpm = round(decoder_rpm.decode_32bit_float(), 2)
+            packed_bytes = struct.pack('HH', register_values[7], register_values[6]) # 제원(R)
+            specifications = struct.unpack('f', packed_bytes)[0]
 
-            # 4. 풍속 (Address 34, Count 2)
-            decoder_wind = BinaryPayloadDecoder.fromRegisters(
-                all_regs[34:36],
-                byteorder=Endian.Little,
-                wordorder=Endian.Little
-            )
-            wind = round(decoder_wind.decode_32bit_float(), 2)
+            packed_bytes = struct.pack('HH', register_values[9], register_values[8]) # 반경1(R) MAIN
+            Radius_MAIN = struct.unpack('f', packed_bytes)[0]
+            
+            packed_bytes = struct.pack('HH', register_values[11], register_values[10]) # 반경2(R) AUX
+            Radius_AUX = struct.unpack('f', packed_bytes)[0]
+                    
+            packed_bytes = struct.pack('HH', register_values[13], register_values[12]) # 실 하중
+            load_weight = struct.unpack('f', packed_bytes)[0]
 
-            # 5. 스윙 각도 (Address 38, Count 2)
-            decoder_swing = BinaryPayloadDecoder.fromRegisters(
-                all_regs[38:40],
-                byteorder=Endian.Little,
-                wordorder=Endian.Little
-            )
-            swing = round(decoder_swing.decode_32bit_float(), 2)
+            packed_bytes = struct.pack('HH', register_values[15], register_values[14]) # 축전지 전압
+            battery_voltage = struct.unpack('f', packed_bytes)[0]
+            
+            packed_bytes = struct.pack('HH', register_values[17], register_values[16]) # 엔진 RPM
+            engine_speed = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[19], register_values[18]) # 엔진 온도
+            engine_temp = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[21], register_values[20]) # 엔진오일압력
+            oil_pressure = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[23], register_values[22]) # 작동유온도
+            Working_oil_temp = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[25], register_values[24]) # MAIN HEIGHT
+            main_height = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[27], register_values[26]) # AUX HEIGHT
+            aux_height = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[29], register_values[28]) # 3RD HEIGHT
+            _rd_height = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[31], register_values[30]) # STATUS1
+            status_1 = struct.unpack('f', packed_bytes)[0]
+            
+            packed_bytes = struct.pack('HH', register_values[33], register_values[32]) # STATUS2
+            status_2 = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[37], register_values[36]) # 하체 각도(R)
+            lower_angle = struct.unpack('f', packed_bytes)[0]
+                                                
+            packed_bytes = struct.pack('HH', register_values[35], register_values[34]) # 풍속/풍향
+            wind_speed = struct.unpack('f', packed_bytes)[0]
+
+            packed_bytes = struct.pack('HH', register_values[39], register_values[38]) # 선회 각도/속도
+            swing_angle = struct.unpack('f', packed_bytes)[0]
 
             data = {
-                "boom length(m)": boom_length,
-                "boom angle(deg)": boom_angle,
-                "weight(ton)": weight,
-                "engine speed(rpm)": rpm,
-                "wind speed(m/s)": wind,
-                "swing angle(deg)": swing
+                "boom length(m)": round(boom_length, 2),          # 붐 길이
+                "boom angle(deg)": round(boom_angle, 2),          # 붐 각도
+                "specifications": round(specifications, 2),       # 제원(R)
+                "radius main(m)": round(Radius_MAIN, 2),          # 반경1(R) MAIN
+                "radius aux(m)": round(Radius_AUX, 2),            # 반경2(R) AUX
+                "load weight(ton)": round(load_weight, 2),        # 실 하중
+                "battery voltage(V)": round(battery_voltage, 2),  # 축전지 전압
+                "engine speed(rpm)": round(engine_speed, 2),      # 엔진 RPM
+                "engine temp(C)": round(engine_temp, 2),          # 엔진 온도
+                "oil pressure": round(oil_pressure, 2),           # 엔진 오일 압력
+                "hydraulic oil temp(C)": round(Working_oil_temp, 2), # 작동유 온도
+                "main height(m)": round(main_height, 2),          # MAIN HEIGHT
+                "aux height(m)": round(aux_height, 2),            # AUX HEIGHT
+                "3rd height(m)": round(_rd_height, 2),            # 3RD HEIGHT
+                "status 1": round(status_1, 2),                   # STATUS 1 (필요 시 정수형 변환 고려)
+                "status 2": round(status_2, 2),                   # STATUS 2
+                "lower angle(deg)": round(lower_angle, 2),        # 하체 각도
+                "wind speed(m/s)": round(wind_speed, 2),          # 풍속/풍향
+                "swing angle(deg)": round(swing_angle, 2)         # 선회 각도/속도
             }
+               
             print(f"[MAIN][DECODED] {data}")
 
             return data

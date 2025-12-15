@@ -2,71 +2,133 @@ import threading
 
 class SharedState:
     def __init__(self):
-        self._danger_level = 0
+        self._lock = threading.Lock()
         
+        # 기존 변수들
+        self._danger_level = 0
         self._boom_length = 0
         self._boom_angle = 0
         self._weight = 0
         self._engine_speed = 0
         self._wind_speed = 0
         self._swing_angle = 0
-        self._lock = threading.Lock()
 
-    # setter 메소드
+        # --- 새로 추가된 변수들 ---
+        self._specifications = 0      # 제원(R)
+        self._radius_main = 0         # 반경1 MAIN
+        self._radius_aux = 0          # 반경2 AUX
+        self._battery_voltage = 0     # 축전지 전압
+        self._engine_temp = 0         # 엔진 온도
+        self._oil_pressure = 0        # 엔진 오일 압력
+        self._hydraulic_oil_temp = 0  # 작동유 온도
+        self._main_height = 0         # MAIN HEIGHT
+        self._aux_height = 0          # AUX HEIGHT
+        self._rd_height = 0           # 3RD HEIGHT (변수명 숫자 시작 불가로 rd_height 사용)
+        self._status_1 = 0            # STATUS 1
+        self._status_2 = 0            # STATUS 2
+        self._lower_angle = 0         # 하체 각도
+        
+        # --- 객체 인식관련 변수 ---
+        self._obj_info = {}        # 객체
+        
+        #기기의 시리얼 넘버
+        self._device_serial = "0000000000000000"
+    # ==========================
+    # Setter 메소드
+    # ==========================
     def set_danger_level(self, level):
-        """
-        Modbus 워커가 이 함수를 호출하여 위험 레벨을 안전하게 업데이트합니다.
-        """
         with self._lock:
             self._danger_level = level
     
     def set_boom_length(self, boom_length):
-        """
-        Modbus 워커가 이 함수를 호출하여 위험 레벨을 안전하게 업데이트합니다.
-        """
         with self._lock:
             self._boom_length = boom_length
 
     def set_boom_angle(self, boom_angle):
-        """
-        Modbus 워커가 이 함수를 호출하여 위험 레벨을 안전하게 업데이트합니다.
-        """
         with self._lock:
             self._boom_angle = boom_angle
     
     def set_weight(self, weight):
-        """
-        Modbus 워커가 이 함수를 호출하여 위험 레벨을 안전하게 업데이트합니다.
-        """
         with self._lock:
             self._weight = weight
 
     def set_engine_speed(self, engine_speed):
-        """
-        Modbus 워커가 이 함수를 호출하여 위험 레벨을 안전하게 업데이트합니다.
-        """
         with self._lock:
             self._engine_speed = engine_speed
 
     def set_wind_speed(self, wind_speed):
-        """
-        Modbus 워커가 이 함수를 호출하여 위험 레벨을 안전하게 업데이트합니다.
-        """
         with self._lock:
             self._wind_speed = wind_speed
     
     def set_swing_angle(self, swing_angle):
-        """
-        Modbus 워커가 이 함수를 호출하여 위험 레벨을 안전하게 업데이트합니다.
-        """
         with self._lock:
             self._swing_angle = swing_angle
-    
-    # getter 메소드                                                                        
+
+    # --- 추가된 Setter ---
+    def set_specifications(self, specifications):
+        with self._lock:
+            self._specifications = specifications
+
+    def set_radius_main(self, radius):
+        with self._lock:
+            self._radius_main = radius
+
+    def set_radius_aux(self, radius):
+        with self._lock:
+            self._radius_aux = radius
+
+    def set_battery_voltage(self, voltage):
+        with self._lock:
+            self._battery_voltage = voltage
+
+    def set_engine_temp(self, temp):
+        with self._lock:
+            self._engine_temp = temp
+
+    def set_oil_pressure(self, pressure):
+        with self._lock:
+            self._oil_pressure = pressure
+
+    def set_hydraulic_oil_temp(self, temp):
+        with self._lock:
+            self._hydraulic_oil_temp = temp
+
+    def set_main_height(self, height):
+        with self._lock:
+            self._main_height = height
+
+    def set_aux_height(self, height):
+        with self._lock:
+            self._aux_height = height
+
+    def set_rd_height(self, height): # 3rd height
+        with self._lock:
+            self._rd_height = height
+
+    def set_status_1(self, status):
+        with self._lock:
+            self._status_1 = status
+
+    def set_status_2(self, status):
+        with self._lock:
+            self._status_2 = status
+
+    def set_lower_angle(self, angle):
+        with self._lock:
+            self._lower_angle = angle
+
+    def set_obj_info(self, obj_info):
+        with self._lock:
+            self._obj_info = obj_info
+
+    def set_serial_info(self, device_serial):
+        with self._lock:
+            self._device_serial = device_serial            
+
+    # ==========================
+    # Getter 메소드
+    # ==========================
     def get_danger_level(self):
-        """
-        시뮬레이터 워커가 이 함수를 호출하여 최신 위험 레벨을 안전하게 읽어옵니다.
-        """
         with self._lock:
             return self._danger_level
 
@@ -92,4 +154,65 @@ class SharedState:
     
     def get_swing_angle(self):
         with self._lock:
-            return self._swing_angle        
+            return self._swing_angle
+
+    # --- 추가된 Getter ---
+    def get_specifications(self):
+        with self._lock:
+            return self._specifications
+
+    def get_radius_main(self):
+        with self._lock:
+            return self._radius_main
+
+    def get_radius_aux(self):
+        with self._lock:
+            return self._radius_aux
+
+    def get_battery_voltage(self):
+        with self._lock:
+            return self._battery_voltage
+
+    def get_engine_temp(self):
+        with self._lock:
+            return self._engine_temp
+
+    def get_oil_pressure(self):
+        with self._lock:
+            return self._oil_pressure
+
+    def get_hydraulic_oil_temp(self):
+        with self._lock:
+            return self._hydraulic_oil_temp
+
+    def get_main_height(self):
+        with self._lock:
+            return self._main_height
+
+    def get_aux_height(self):
+        with self._lock:
+            return self._aux_height
+
+    def get_rd_height(self):
+        with self._lock:
+            return self._rd_height
+
+    def get_status_1(self):
+        with self._lock:
+            return self._status_1
+
+    def get_status_2(self):
+        with self._lock:
+            return self._status_2
+
+    def get_lower_angle(self):
+        with self._lock:
+            return self._lower_angle
+
+    def get_obj_info(self):
+        with self._lock:
+            return self._obj_info        
+
+    def get_serial_info(self):
+        with self._lock:
+            return self._device_serial        

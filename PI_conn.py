@@ -29,8 +29,8 @@ try:
         client.exec_command(f"mkdir -p {remote_dir}")
 
         file_names = ['analysis', 'Crane_MQTT', 'CraneDataSimulatorWorker', 
-                      'koceti_485_Read_Modbus', 'koceti_Read_Modbus', 'koceti_worker', 
-                      'modbus_worker', 'processor', 'send_ip', 'shared_state'
+                      'koceti_485_Read_Modbus', 'koceti_Read_Modbus', 'koceti_worker', 'modbus_worker', 
+                      'processor', 'send_ip', 'shared_state', 
                       'main'
                       ]
         for name in file_names:
@@ -98,7 +98,7 @@ try:
     elif flow == '3':
         print(' - PI video analysis 바로 실행 -')
         try:
-            command = 'cd ~/Video_analysis && python3 main.py'
+            command = 'cd ~/Video_analysis && python3 test.py'
             stdin, stdout, stderr = client.exec_command(command)
 
             for line in iter(stdout.readline, ''):

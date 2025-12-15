@@ -18,6 +18,7 @@ def send_ip():
         print("[sent]", msg)
     except Exception as e:
         print("[err]", e)
-    
+    return ip
+
 if __name__ == '__main__':
     send_ip()

@@ -6,9 +6,14 @@ import json
 from datetime import datetime
 from Crane_MQTT import MQTTClient # Crane_MQTT.py 파일이 있다고 가정
 from shared_state import SharedState
+#import msgpack
 
 class CraneDataSimulatorWorker:
-    def __init__(self, data_queue,shared_state, period_sec=0.3):
+    def __init__(self, data_queue,shared_state, period_sec=1):
+        # 시리얼 넘버
+        self.device_serial = ""
+        # 인식된 객체 정보
+        self.obj_info = {}
         # 시뮬레이션 할 데이터 를 정의 합니다.
         #각도, 축전지 전압, MAIN HEIGHT, STATUS3(예비), 제원, 엔진 RPM, AUX HEIGHT, 풍속/풍향, 반경1 MAIN, 엔진 온도, 3RD HEIGHT, 선회각도/속도, 반경2 AUX, 엔진 오일압력, STATUS1, 하체 각도, 붐 각도
         self.boom_length = 0.00 # 붐 길이
@@ -31,12 +36,9 @@ class CraneDataSimulatorWorker:
         self.turning_speed = 0.0 #선회각도/속도
         self.AUX_radius2 = 0 #반경2 AUX
         self.oil_pressure = 0.000 # 엔진오일 압력
-        self.body_angle = 0.00 # 하체 각도
+        self.body_angle_x = 0.00 # 하체 각도 x
+        self.body_angle_y = 0.00 # 하체 각도 y
         self.boom_angle = 0.0 # 붐각도
-        self.X1 = 0.00 #장애물 위치
-        self.X2 = 0.00
-        self.Y1 = 0.00
-        self.Y2 = 0.00
         self.danger = 0 # 위험도
         self.period_sec = period_sec
         self.data_queue = data_queue
@@ -49,69 +51,93 @@ class CraneDataSimulatorWorker:
     
     def _run(self):
         try:
+            """
+            백그라운드 쓰레드에서 실행될 메인 로직.
+            기존 main() 함수의 while 루프가 여기에 들어옵니다.
+            """
+            print("[Worker] 데이터 시뮬레이터 쓰레드 시작.")
+            
+            # --- MQTT 연결 및 루프 시작 ---
+            self.mqtt.connecting()
+            self.mqtt.loop_start()
+        
             # 각 장비의 Unit ID를 변수로 지정 (실제 ID로 변경 가능)
             STABILITY_SENSOR_ID = 1
-            MAIN_CRANE_ID = 2    # 지금은 안 쓰지만 의미상 유지
-
-            # 1. 메인 크레인 데이터 수신용 서버 시작
-            self.crane_tester.start_main_crane_server(port=self.main_crane_port)
-
-            # 2. 안전센서 쪽 Modbus 접속
-            if not self.crane_tester.connect_safety():
-                print("[Worker] [ERROR] 연결 실패. 쓰레드를 종료합니다.")
-                self.data_queue.put({"error": f"연결 실패: {self.safety_port} 포트를 확인하세요."})
-                return
 
             # 3. 주기 루프
             while not self._stop.is_set():
                 start = time.time()
-                ts = datetime.now().strftime("%H:%M:%S")
-
-                # --- 3-1. 안전센서 데이터 ---
-                final_data = self.crane_tester.get_safety_sensor_data(STABILITY_SENSOR_ID)
-                if final_data is None:
-                    print(f"[{ts}][WORKER] 사이클 실패 (안전센서 응답 오류 또는 예외)")
-                else:
-                    print(f"[{ts}][WORKER] 사이클 OK")
-                    print(f"[{ts}][WORKER][SAFETY] raw={final_data.get('raw')}")
-                    print(f"[{ts}][WORKER][SAFETY] risk={final_data.get('risk_assessment')}")
-
-                    # 큐로 전달
-                    self.data_queue.put(final_data)
-
-                    # shared_state 위험도 갱신
-                    risk_assessment = final_data.get("risk_assessment", {})
-                    risk_level = risk_assessment.get("level_num", 0)
-                    self.shared_state.set_danger_level(risk_level)
-                    print(f"[{ts}][WORKER][STATE] danger_level -> {risk_level}")
-
-                # --- 3-2. 메인 크레인 데이터 ---
-                main_data = self.crane_tester.get_main_crane_data()
-                if main_data:
-                    print(f"[{ts}][WORKER][MAIN RAW] {main_data}")
-
-                    boom_length = main_data.get("boom length(m)", 0)
-                    boom_angle = main_data.get("boom angle(deg)", 0)
-                    weight = main_data.get("weight(ton)", 0)
-                    engine_speed = main_data.get("engine speed(rpm)", 0)
-                    wind_speed = main_data.get("wind speed(m/s)", 0)
-                    swing_angle = main_data.get("swing angle(deg)", 0)
-
-                    # shared_state에 저장
-                    self.shared_state.set_boom_length(boom_length)
-                    self.shared_state.set_boom_angle(boom_angle)
-                    self.shared_state.set_weight(weight)
-                    self.shared_state.set_engine_speed(engine_speed)
-                    self.shared_state.set_wind_speed(wind_speed)
-                    self.shared_state.set_swing_angle(swing_angle)
-
-                    print(
-                        f"[{ts}][WORKER][STATE] boom_length={boom_length}, boom_angle={boom_angle}, "
-                        f"weight={weight}, engine_speed={engine_speed}, "
-                        f"wind_speed={wind_speed}, swing_angle={swing_angle}"
-                    )
-                else:
-                    print(f"[{ts}][WORKER][MAIN] 메인 크레인 데이터 수신 실패.")
+                
+                # 1. MQTT 메시지 수신 및 처리
+                msg = self.mqtt.get_message()
+                if msg is not None:
+                    try:
+                        jsonObject = json.loads(msg)
+                        self.body_angle_x = jsonObject.get('INCLINATION_X', [0])[0] / 100
+                        self.body_angle_y = jsonObject.get('INCLINATION_Y', [0])[0] / 100
+                    except (TypeError, json.JSONDecodeError) as e:
+                        print(f"Error decoding JSON: {e}")
+                        continue                
+                self.device_serial = self.shared_state.get_serial_info()
+                self.boom_length = self.shared_state.get_boom_length()
+                self.actual_load = self.shared_state.get_weight()
+                self.fluid_temp =  self.shared_state.get_hydraulic_oil_temp() #작동유 온도
+                self.STATUS1 = 0#STATUS1
+                self.STATUS2 = 0#STATUS2
+                self.STATUS3 = 0#STATUS3(예비)
+                    
+                self.voltage = self.shared_state.get_battery_voltage() # 축전지 전압
+                self.MAIN_HEIGHT = self.shared_state.get_main_height()
+                self.spec = self.shared_state.get_specifications() #제원
+                self.engine_rpm = self.shared_state.get_engine_speed() # 엔진 RPM
+                self.AUX_HEIGHT = self.shared_state.get_aux_height() #AUX HEIGHT
+                self.wind = self.shared_state.get_wind_speed() #풍속/풍향
+                self.MAIN_radius1 = self.shared_state.get_radius_main() #반경1 MAIN
+                self.engine_temp = self.shared_state.get_engine_temp() #엔진 온도
+                self.RD_HEIGHT = self.shared_state.get_rd_height() #
+                self.turning_angle =self.shared_state.get_swing_angle() #선회각도/속도
+                self.turning_speed = 0
+                self.AUX_radius2 = self.shared_state.get_radius_aux()
+                self.oil_pressure = self.shared_state.get_oil_pressure() # 엔진오일 압력
+                self.body_angle = self.shared_state.get_lower_angle() # 하체 각도
+                self.boom_angle = self.shared_state.get_boom_angle()
+                self.danger = self.shared_state.get_danger_level()
+                
+                self.obj_info = self.shared_state.get_obj_info() # 객체 인식정보
+                # 3. 최종 데이터 딕셔너리 생성
+                message = {
+                           "device_serial":self.device_serial,
+                           "boom_length":self.boom_length,
+                           "actual_load":self.actual_load,
+                           "fluid_temp":self.fluid_temp,
+                           "STATUS1":self.STATUS1,
+                           "STATUS2":self.STATUS2,
+                           "STATUS3":self.STATUS3,
+                           "angle":self.angle,
+                           "voltage":self.voltage,
+                           "MAIN_HEIGHT":self.MAIN_HEIGHT,
+                           "spec":self.spec,
+                           "engine_rpm":self.engine_rpm,
+                           "AUX_HEIGHT":self.AUX_HEIGHT,
+                           "wind":self.wind,
+                           "MAIN_radius1":self.MAIN_radius1,
+                           "engine_temp":self.engine_temp,
+                           "RD_HEIGHT":self.RD_HEIGHT,
+                           "turning_angle":self.turning_angle,
+                           "turning_speed":self.turning_speed,
+                           "AUX_radius2":self.AUX_radius2,
+                           "oil_pressure":self.oil_pressure,
+                           "body_angle_x":self.body_angle_x,
+                           "body_angle_y":self.body_angle_y,
+                           "boom_angle":self.boom_angle,
+                           "danger":self.danger,
+                           "obj_info":self.obj_info
+                        }
+                
+                #packed_data = msgpack.packb(message)
+                self.data_queue.put(message)
+                #print(f"[Worker] 시뮬레이터 데이터 생성 및 큐에 저장: {message}")
+                self.mqtt.Analysis_msg("Event/CraneTest/", json.dumps(message))
 
                 # --- 3-3. 주기 맞추기 ---
                 elapsed = time.time() - start
@@ -121,8 +147,11 @@ class CraneDataSimulatorWorker:
                     while not self._stop.is_set() and time.time() < end:
                         time.sleep(0.1)
         finally:
-            self.crane_tester.close_safety()
-            print("[Worker] 연결이 안전하게 종료되었습니다.")
+            # 6. 쓰레드가 종료될 때 MQTT 리소스를 안전하게 정리합니다.
+            print("[Worker] MQTT 연결을 종료합니다.")
+            self.mqtt.loop_stop()
+            self.mqtt.disconnect()
+            print("[Worker] 데이터 시뮬레이터 쓰레드 종료.")
 
     # --- start, stop, join 메소드는 modbus_worker와 동일 ---
     def start(self, daemon=True):

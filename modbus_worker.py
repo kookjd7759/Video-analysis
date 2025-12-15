@@ -16,6 +16,7 @@ class modbus_worker:
         # 각 장비의 Unit ID를 변수로 지정 (실제 ID로 변경해야 합니다)
         STABILITY_SENSOR_ID = 1
         MAIN_CRANE_ID = 2        
+        
         # 1. Crane_Final_Test 객체를 '쓰레드 안에서' 생성하고 연결합니다.
         self.crane_tester = Crane_Final_Test(port=self.port)
         self.shared_state = SharedState()
@@ -44,17 +45,85 @@ class modbus_worker:
                     main_data = self.crane_tester.get_main_crane_data()
                     if main_data:
                         print(f"[메인 크레인 ID:{MAIN_CRANE_ID}] 수신 데이터: {main_data}")
+
+                        # 1. 붐 길이
                         boom_length = main_data.get("boom length(m)", 0)
                         self.shared_state.set_boom_length(boom_length)
+
+                        # 2. 붐 각도
                         boom_angle = main_data.get("boom angle(deg)", 0)
                         self.shared_state.set_boom_angle(boom_angle)
-                        weight = main_data.get("weight(ton)", 0)
+
+                        # 3. 실 하중 (앞선 딕셔너리 키와 일치시킴: "load weight(ton)" 혹은 "weight(ton)")
+                        # 앞 코드에서 "weight(ton)"을 사용하셨으므로 그대로 유지합니다.
+                        weight = main_data.get("weight(ton)", 0) 
                         self.shared_state.set_weight(weight)
+
+                        # 4. 엔진 RPM
                         engine_speed = main_data.get("engine speed(rpm)", 0)
                         self.shared_state.set_engine_speed(engine_speed)
+
+                        # 5. 풍속 (오타 수정: engine_speed -> wind_speed)
                         wind_speed = main_data.get("wind speed(m/s)", 0)
-                        self.shared_state.set_wind_speed(engine_speed)
+                        self.shared_state.set_wind_speed(wind_speed)
+
+                        # 6. 선회 각도
                         swing_angle = main_data.get("swing angle(deg)", 0)
+                        self.shared_state.set_swing_angle(swing_angle)
+
+                        # --- 추가된 항목들 ---
+
+                        # 7. 제원(R)
+                        specifications = main_data.get("specifications", 0)
+                        self.shared_state.set_specifications(specifications)
+
+                        # 8. 반경 Main
+                        radius_main = main_data.get("radius main(m)", 0)
+                        self.shared_state.set_radius_main(radius_main)
+
+                        # 9. 반경 Aux
+                        radius_aux = main_data.get("radius aux(m)", 0)
+                        self.shared_state.set_radius_aux(radius_aux)
+
+                        # 10. 축전지 전압
+                        battery_voltage = main_data.get("battery voltage(V)", 0)
+                        self.shared_state.set_battery_voltage(battery_voltage)
+
+                        # 11. 엔진 온도
+                        engine_temp = main_data.get("engine temp(C)", 0)
+                        self.shared_state.set_engine_temp(engine_temp)
+
+                        # 12. 엔진 오일 압력
+                        oil_pressure = main_data.get("oil pressure", 0)
+                        self.shared_state.set_oil_pressure(oil_pressure)
+
+                        # 13. 작동유 온도
+                        hydraulic_temp = main_data.get("hydraulic oil temp(C)", 0)
+                        self.shared_state.set_hydraulic_oil_temp(hydraulic_temp)
+
+                        # 14. Main Height
+                        main_height = main_data.get("main height(m)", 0)
+                        self.shared_state.set_main_height(main_height)
+
+                        # 15. Aux Height
+                        aux_height = main_data.get("aux height(m)", 0)
+                        self.shared_state.set_aux_height(aux_height)
+
+                        # 16. 3rd Height
+                        rd_height = main_data.get("3rd height(m)", 0)
+                        self.shared_state.set_3rd_height(rd_height)
+
+                        # 17. Status 1
+                        status_1 = main_data.get("status 1", 0)
+                        self.shared_state.set_status_1(status_1)
+
+                        # 18. Status 2
+                        status_2 = main_data.get("status 2", 0)
+                        self.shared_state.set_status_2(status_2)
+
+                        # 19. 하체 각도
+                        lower_angle = main_data.get("lower angle(deg)", 0)
+                        self.shared_state.set_lower_angle(lower_angle)
                     else:
                         print(f"[메인 크레인 ID:{MAIN_CRANE_ID}] 데이터 수신 실패.")
                     

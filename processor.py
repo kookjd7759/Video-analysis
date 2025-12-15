@@ -6,6 +6,9 @@ import cv2
 import torch
 from ultralytics import YOLO
 
+# [추가] 양자화 도구 임포트
+from onnxruntime.quantization import quantize_dynamic, QuantType
+
 class YOLORealSenseProcessor:
     def __init__(
         self,
@@ -32,9 +35,17 @@ class YOLORealSenseProcessor:
                 pass
 
         # YOLO 로드
-        tflite_path = YOLO(model_path).export(format='onnx', opset=12, simplify=True, dynamic=True)
-        self.model = YOLO(tflite_path)
         self.device = device
+        # 파일 경로 정의
+        base_name = model_path.replace('.pt', '')
+        ncnn_path = base_name + 'yolo11n_ncnn_model'
+        
+        # 2. 일반 ONNX 모델이 없으면 먼저 생성 (pt -> onnx)
+        if not os.path.exists(ncnn_path):
+            print("➡ ONNX 변환 중... (pt -> onnx)")
+            # 주의: 변수에 저장되는 경로는 return 값 활용
+            ncnn_path = YOLO(model_path).export(format='ncnn', half=True)
+            self.model = YOLO(ncnn_path)
         try:
             # 장치 지정 (GPU 사용 시 정확도 및 속도 향상)
             self.model.to(self.device)
@@ -47,12 +58,15 @@ class YOLORealSenseProcessor:
         self.imgsz = imgsz
         self.max_det = max_det
         self.use_tta = use_tta
-
+        
+        # [수정] 라즈베리파이인 경우 FPS를 6으로, PC면 15~30으로 설정
+        target_fps = 15 if self._is_raspberry_pi else 30
+        
         # RealSense 파이프라인
         self.pipeline = rs.pipeline()
         config = rs.config()
-        config.enable_stream(rs.stream.depth, 640, 360, rs.format.z16, 15)
-        config.enable_stream(rs.stream.color, 640, 360, rs.format.bgr8, 15)
+        config.enable_stream(rs.stream.depth, 640, 360, rs.format.z16, target_fps)
+        config.enable_stream(rs.stream.color, 640, 360, rs.format.bgr8, target_fps)
         self.profile = self.pipeline.start(config)
 
         sensor = self.profile.get_device().first_depth_sensor()
@@ -116,13 +130,12 @@ class YOLORealSenseProcessor:
         return float(closest.mean())
 
 
-    def get_frame(self):
+    def get_frame(self, return_depth_vis=False):
         frames = self.pipeline.wait_for_frames()
         aligned = self.align.process(frames)
         depth_frame = aligned.get_depth_frame()
         color_frame = aligned.get_color_frame()
         if not depth_frame or not color_frame:
-            print("[RS][WARN] depth_frame or color_frame is None")
             return None, []
 
         # 필터 적용
@@ -136,33 +149,28 @@ class YOLORealSenseProcessor:
         depth_img = np.asanyarray(depth_frame.get_data())
         H, W = color_img.shape[:2]
 
-        print(f"[RS][FRAME] color_shape={color_img.shape}, depth_shape={depth_img.shape}")
-
         # YOLO 추론 (사람만)
         with torch.inference_mode():
             result = self.model.predict(
-                source=color_img,
-                imgsz=self.imgsz,
-                conf=self.conf_threshold,
-                iou=self.iou_threshold,
-                max_det=self.max_det,
-                device=self.device,
-                classes=[0],            # 사람 class만
-                verbose=False,
-                augment=self.use_tta,
+            source=color_img,
+            imgsz=self.imgsz,
+            conf=self.conf_threshold,
+            iou=self.iou_threshold,
+            max_det=self.max_det,
+            device=self.device,
+            classes=[0],
+            verbose=False,
+            augment=self.use_tta,
             )[0]
 
-        if result is None or result.boxes is None:
-            return color_img, []
-
-        boxes = result.boxes.xyxy.detach().cpu().numpy()
-        scores = result.boxes.conf.detach().cpu().numpy()
-        clses = result.boxes.cls.detach().cpu().numpy()
-
-        mask = scores >= self.conf_threshold
-        boxes = boxes[mask]
-        scores = scores[mask]
-        clses = clses[mask]
+        boxes, scores, clses = [], [], []
+        for box in result.boxes:
+            x1, y1, x2, y2 = map(float, box.xyxy[0])
+            conf = float(box.conf[0])
+            cls_id = int(box.cls[0]) if hasattr(box, "cls") else 0
+            boxes.append([x1, y1, x2, y2])
+            scores.append(conf)
+            clses.append(cls_id)
 
         all_boxes = []
         detections = []
@@ -186,10 +194,6 @@ class YOLORealSenseProcessor:
                 "center": round(center_norm, 4)  # 소수 4자리 정도로
             })
 
-        print(f"[RS][DETECT] count={len(detections)}")
-        if detections:
-            print(f"[RS][DETECT SAMPLE] {detections[0]}")
-
         # 시각화(박스 + 라벨)
         for x1, y1, x2, y2, label, d, center_norm in all_boxes:
             color = (0, 255, 0)
@@ -197,17 +201,19 @@ class YOLORealSenseProcessor:
             cv2.rectangle(color_img, (x1, y1), (x2, y2), color, 2)
             cv2.putText(color_img, txt, (x1, y1 - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+        if return_depth_vis:
+            # depth 시각화
+            depth_m = depth_img.astype(np.float32) * self.depth_scale
+            depth_clip = np.clip(depth_m, 0.0, 4.0)
+            depth_u8 = ((depth_clip / 4.0) * 255).astype(np.uint8)
+            depth_color = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
+            depth_color = cv2.resize(depth_color, (color_img.shape[1], color_img.shape[0]))
 
-        # depth 시각화
-        depth_m = depth_img.astype(np.float32) * self.depth_scale
-        depth_clip = np.clip(depth_m, 0.0, 4.0)
-        depth_u8 = ((depth_clip / 4.0) * 255).astype(np.uint8)
-        depth_color = cv2.applyColorMap(depth_u8, cv2.COLORMAP_JET)
-        depth_color = cv2.resize(depth_color, (color_img.shape[1], color_img.shape[0]))
-
-        combined = np.hstack((color_img, depth_color))
-        return combined, detections
-
+            combined = np.hstack((color_img, depth_color))
+            return combined, detections
+        else:
+            return color_img, detections
+        
     def stop(self):
         try:
             self.pipeline.stop()

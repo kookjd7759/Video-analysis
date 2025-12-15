@@ -7,7 +7,7 @@ from flask import Flask, Response, jsonify, request
 from processor import YOLORealSenseProcessor
 
 class AnalysisApp:
-    def __init__(self, host="0.0.0.0", port=5000):
+    def __init__(self, host="0.0.0.0", port=5000, shared_state=None):
         # ===== 스트림 / 레이더 기본 설정 =====
         self.STREAM_W = 640          # 스트림 가로 리사이즈(원본이 더 크면 축소)
         self.JPEG_QUALITY = 40       # JPEG 품질(50~70 추천)
@@ -42,7 +42,17 @@ class AnalysisApp:
         self.host = host
         self.port = port
         
+        self.shared_state = shared_state
+        
         self.server_thread = None # 스레드 객체를 저장할 변수
+        
+        # [추가] 목표 FPS 설정 (예: 15프레임으로 제한)
+        self.TARGET_FPS = 15
+        if self.TARGET_FPS > 0:
+            self.FRAME_INTERVAL = 1.0 / self.TARGET_FPS
+        else:
+            self.FRAME_INTERVAL = 0
+            
         # 종료 엔드포인트를 앱에 추가합니다.
         @self.app.route('/shutdown', methods=['POST'])
         def shutdown():
@@ -80,7 +90,7 @@ class AnalysisApp:
         """라즈베리파이 아닌 PC에서 로컬 미리보기"""
         try:
             while True:
-                frame, _ = self.processor.get_frame()
+                frame, _ = self.processor.get_frame(return_depth_vis=False)
                 if frame is None:
                     continue
                 cv2.imshow("Local Preview", frame)
@@ -95,7 +105,10 @@ class AnalysisApp:
     # -------------------------------
     def _capture_loop(self):
         while not self._stop_evt.is_set():
-            frame, detections = self.processor.get_frame()
+            # 1. 루프 시작 시간 기록
+            start_time = time.time()
+            
+            frame, detections = self.processor.get_frame(return_depth_vis=False)
             if frame is None:
                 time.sleep(0.005)
                 continue
@@ -103,7 +116,31 @@ class AnalysisApp:
             if isinstance(detections, list):
                 with self._lock:
                     self._latest_objects = detections
+                
+                # 1. /info와 똑같은 형태의 리스트 만들기
+                formatted_objects = []
+                for o in detections:
+                    if not isinstance(o, dict):
+                        continue
+                    dist = o.get("distance")
+                    center = o.get("center")
+                    
+                    # 유효한 숫자인지 확인 후 포맷팅 (거리 소수점 2자리, 센터 3자리)
+                    if isinstance(dist, (int, float)) and isinstance(center, (int, float)):
+                        formatted_objects.append({
+                            "distance": round(float(dist), 2),
+                            "center": round(float(center), 3)
+                        })
 
+                # 2. 최종 딕셔너리 생성 (JSON 구조와 동일)
+                final_dict = {
+                    "count": len(formatted_objects),
+                    "objects": formatted_objects
+                }
+
+                # 3. 메서드 호출하여 딕셔너리 통째로 넘기기
+                self.shared_state.set_obj_info(final_dict)
+                
             # 스트리밍용 JPEG 프레임을 미리 만들어 공유 버퍼에 저장
             h, w = frame.shape[:2]
             if w > self.STREAM_W:
@@ -121,7 +158,18 @@ class AnalysisApp:
                 self._new_frame_evt.set()   # 새 프레임 신호
                 self._new_frame_evt.clear()
 
-            time.sleep(0.001)
+            # [수정] 프레임 제한 로직 적용
+            # 처리하는 데 걸린 시간 계산
+            elapsed_time = time.time() - start_time
+            
+            # 목표 시간보다 빨리 처리했다면 남은 시간만큼 대기
+            if self.FRAME_INTERVAL > 0:
+                wait_time = self.FRAME_INTERVAL - elapsed_time
+                if wait_time > 0:
+                    time.sleep(wait_time)
+            else:
+                # FPS 제한이 없으면 최소한의 대기만 수행
+                time.sleep(0.001)
 
     # -------------------------------
     # 레이더 도우미
@@ -266,11 +314,28 @@ class AnalysisApp:
                 center = o.get('center')
                 if not isinstance(dist, (int, float)) or not isinstance(center, (int, float)):
                     continue
+
                 px, py = self.pol2pix_from_center(center, dist, origin, R, hfov_deg=hfov, dmax=dmax)
-                cv2.circle(img, (px, py), 6, (0, 0, 255), -1, cv2.LINE_AA)
-                cv2.circle(img, (px, py), 6, (0, 0, 0), 1, cv2.LINE_AA)
-                cv2.putText(img, f"{dist:.2f}m", (px + 10, py - 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
+
+                # === 점 더 크고 진하게 ===
+                radius = 14
+                # 빨간 실체
+                cv2.circle(img, (px, py), radius, (0, 0, 255), -1, cv2.LINE_AA)
+                # 검은 외곽선
+                cv2.circle(img, (px, py), radius + 2, (0, 0, 0), 2, cv2.LINE_AA)
+
+                # === 거리 텍스트 더 크게 + 아웃라인 처리 ===
+                label = f"{dist:.2f}m"
+                org = (px + 14, py - 10)
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 1.2
+                thickness = 2
+
+                # 검은 외곽선
+                cv2.putText(img, label, org, font, font_scale, (0, 0, 0), thickness + 2, cv2.LINE_AA)
+                # 흰 본문
+                cv2.putText(img, label, org, font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
+
 
             ok, buf = cv2.imencode('.png', img)
             if not ok:
@@ -296,11 +361,19 @@ class AnalysisApp:
                 @media (min-width: 1100px){ .row{grid-template-columns: 3fr 2fr;} }
                 .card{background:#1b1b1b;border:1px solid #2b2b2b;border-radius:12px;padding:12px}
                 img.view{max-width:100%;height:auto;border-radius:10px;display:block;margin:auto;
-                         box-shadow:0 4px 24px rgba(0,0,0,.4)}
+                        box-shadow:0 4px 24px rgba(0,0,0,.4)}
                 pre{white-space:pre-wrap;line-height:1.7;margin:0}
+                pre#info{
+                    font-size:16px;
+                    font-weight:500;
+                }
+                .title{
+                    font-weight:700;
+                    font-size:16px;
+                    margin:0 0 8px;
+                }
                 .muted{color:#aaa;font-size:12px;margin-top:6px}
-                .title{font-weight:700;margin:0 0 8px}
-              </style>
+                </style>
             </head>
             <body>
               <div class="wrap">

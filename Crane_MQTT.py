@@ -25,8 +25,7 @@ class MQTTClient:
     
     def on_connect(self,client, userdata, flags, rc):
         if rc == 0:
-            print("on_connect")
-            self.Mqtt_Connection = True
+            self.subscribe()
         else:
             self.Mqtt_Connection = False
 
@@ -41,21 +40,15 @@ class MQTTClient:
     def on_subscribe(self,client, userdata, mid, granted_qos):
         #print("subscribed: " + str(mid) + " " + str(granted_qos))
         pass    
-
-    def on_message(self, client, userdata, msg):
-        payload = msg.payload.decode("utf-8")
-        print(f"[MQTT][RECV] topic={msg.topic}, payload={payload}")
-        self.message_queue.put(payload)
+    def on_message(self,client,userdata,msg):
+        self.message_queue.put(msg.payload.decode("utf-8"))
     
     def Analysis_msg(self,topics,message):
         self.client.publish(topics,message, 1) #Event/T-MDS/YJSensing/
     
     def subscribe(self):
-        if self.Mqtt_Connection: # 이미 연결된 경우에만 구독 수행
-            for mac in self.Module_list:
-                topic = f"Event/T-MDS/YJSensing/{mac}/"
-                print(f"[MQTT][SUB] {topic}")
-                self.client.subscribe(topic)
+        for mac in self.Module_list:
+            self.client.subscribe(f"Event/T-MDS/YJSensing/{mac}/") #
             
     def connecting(self):
         self.client.on_connect = self.on_connect
