@@ -1,14 +1,16 @@
-import socket, requests
+import socket, requests, psutil
 
 TOPIC = "https://ntfy.sh/solimatics-raspberryPi-report-IP_dan12kjvh4k6jhj"
 
 def get_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    finally:
-        s.close()
+    # 라즈베리파이의 무선랜 이름인 'wlan0'을 직접 찾습니다
+    addrs = psutil.net_if_addrs().get('wlan0')
+    
+    if addrs:
+        for addr in addrs:
+            if addr.family == socket.AF_INET: # IPv4 주소만
+                return addr.address
+    return "0.0.0.0"
 
 def send_ip():
     ip = get_ip()

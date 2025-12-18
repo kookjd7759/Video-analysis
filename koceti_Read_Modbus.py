@@ -8,7 +8,7 @@ from pymodbus.server import StartSerialServer
 from pymodbus.datastore import ModbusSequentialDataBlock
 from pymodbus.datastore import ModbusDeviceContext, ModbusServerContext
 
-class Crane_Final_Test:
+class koceti_Read_Modbus:
     def __init__(self, target_ip ="0.0.0.0", port=5005, timeout=1):
         print(f"Modbus UDP 클라이언트 초기화: 주소={target_ip}, port={port}")
         self.safety_client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -79,7 +79,7 @@ class Crane_Final_Test:
         else:
             return {"  ": 3, "level_str": "위험", "color": "red", "message": "전복 위험! 즉시 모든 작업을 중단하십시오!"}
                         
-    def get_safety_sensor_data(self, device_id):
+    def get_safety_sensor_data(self):
         """
         '최신' 데이터를 장비로부터 읽어와서 처리하고, 결과 딕셔너리를 반환합니다.
         """
@@ -91,46 +91,51 @@ class Crane_Final_Test:
         response, addr = self.safety_client.recvfrom(1024)
         print(f"[SAFETY][RAW] unit={addr}, response={response}")
 
-        expected_length = 25 
+        expected_length = 101 #25 -> LMI 데이터를 수신 하지 않을경우는 25 바이트, LMI 포함시 101 바이트
         if len(response) < expected_length:
             print(f"[ERROR] 데이터 길이가 부족합니다. 수신: {len(response)}B, 예상: {expected_length}B")
             return None
 
         try:
             # 25바이트만 잘라서 파싱
-            unpacked_data = struct.unpack('<6fB', response[:25])
+            unpacked_data = struct.unpack('<6fB19f', response[:25]) # 패딩이 있는 경우 포맷: <6fB3x19f (3x는 3바이트를 건너뛴다는 뜻)
         except struct.error as e:
             print(f"[ERROR] 데이터 파싱 실패: {e}")
             return None
-        
-        left_lc_1 = unpacked_data[0]
-        left_lc_2 = unpacked_data[1]
-        left_lc_3 = unpacked_data[2]
-        right_lc_1 = unpacked_data[3]
-        right_lc_2 = unpacked_data[4]
-        right_lc_3 = unpacked_data[5]
-        roll_over_flag = unpacked_data[6] # 0: Normal, 1: Warning
-
-
-        #print(f"[SAFETY][RECV] L1={left_lc_1:.2f}, L2={left_lc_2:.2f}, L3={left_lc_3:.2f}")
-        #print(f"[SAFETY][RECV] R1={right_lc_1:.2f}, R2={right_lc_2:.2f}, R3={right_lc_3:.2f}")
-        #print(f"[SAFETY][RECV] Warning Level={roll_over_flag}")
 
         results = {
-            "left_lc_1": left_lc_1,
-            "left_lc_2": left_lc_2,
-            "left_lc_3": left_lc_3,
-            "right_lc_1": right_lc_1,
-            "right_lc_2": right_lc_2,
-            "right_lc_3": right_lc_3,
-            "roll_over_flag": roll_over_flag,
+            # --- 기존 데이터 (No. 1 ~ 7) ---
+            "left_lc_1": unpacked_data[0],
+            "left_lc_2": unpacked_data[1],
+            "left_lc_3": unpacked_data[2],
+            "right_lc_1": unpacked_data[3],
+            "right_lc_2": unpacked_data[4],
+            "right_lc_3": unpacked_data[5],
+            "roll_over_flag": unpacked_data[6], # 0: Normal, 1: Warning
+
+            # --- 추가된 데이터 (No. 8 ~ 26) ---
+            "boom length(m)": unpacked_data[7],         # 8. 붐 길이 (Meter)
+            "boom angle(deg)": unpacked_data[8],          # 9. 붐 각도 (Degree)
+            "specifications": unpacked_data[9],          # 10. 제원 (아마 정격 하중?)
+            "radius main(m)": unpacked_data[10],           # 11. 반경 1
+            "radius aux(m)": unpacked_data[11],           # 12. 반경 2
+            "load weight(ton)": unpacked_data[12],        # 13. 실 하중 (Ton)
+            "battery voltage(V)": unpacked_data[13],    # 14. 축전지 전압 (Voltage)
+            "engine speed(rpm)": unpacked_data[14],         # 15. 엔진 회전수 (RPM)
+            "engine temp(C)": unpacked_data[15],        # 16. 엔진 온도
+            "oil pressure": unpacked_data[16],# 17. 엔진 오일 압력
+            "hydraulic oil temp(C)": unpacked_data[17], # 18. 작동유 온도
+            "main height(m)": unpacked_data[18],        # 19. Main Height
+            "aux height(m)": unpacked_data[19],         # 20. Aux Height
+            "3rd height(m)": unpacked_data[20],       # 21. 3RD Height
+            "status 1": unpacked_data[21],           # 22. Status1
+            "status_2": unpacked_data[22],           # 23. Status1 (오타 추정, Status2로 명명)
+            "chassis_angle": unpacked_data[23],      # 24. 하체 각도
+            "wind speed(m/s)": unpacked_data[24],          # 25. 풍속 풍향
+            "swing angle(deg)": unpacked_data[25],         # 26. 선회 각도 속도
         }
 
-        final_result = {
-            "raw": results,
-            "risk_assessment": roll_over_flag
-        }
-        return final_result
+        return results
 
     # --- [기능 2] 메인 크레인 서버 구동 및 데이터 읽기 (Server) ---
     def start_main_crane_server(self, port):
@@ -215,7 +220,20 @@ class Crane_Final_Test:
 
             packed_bytes = struct.pack('HH', register_values[39], register_values[38]) # 선회 각도/속도
             swing_angle = struct.unpack('f', packed_bytes)[0]
-
+            
+            packed_data = struct.pack(
+                '<19f',
+                float(boom_length), float(boom_angle), float(specifications),
+                float(Radius_MAIN), float(Radius_AUX), float(load_weight),
+                float(battery_voltage), float(engine_speed), float(engine_temp),
+                float(oil_pressure), float(Working_oil_temp), float(main_height),
+                float(aux_height), float(_rd_height),
+                float(lower_angle), float(wind_speed), float(swing_angle),
+                float(status_1), float(status_2)
+            )
+            
+            self.safety_client.sendto(packed_data, self.target_address)
+            
             data = {
                 "boom length(m)": round(boom_length, 2),          # 붐 길이
                 "boom angle(deg)": round(boom_angle, 2),          # 붐 각도
@@ -231,11 +249,11 @@ class Crane_Final_Test:
                 "main height(m)": round(main_height, 2),          # MAIN HEIGHT
                 "aux height(m)": round(aux_height, 2),            # AUX HEIGHT
                 "3rd height(m)": round(_rd_height, 2),            # 3RD HEIGHT
-                "status 1": round(status_1, 2),                   # STATUS 1 (필요 시 정수형 변환 고려)
-                "status 2": round(status_2, 2),                   # STATUS 2
                 "lower angle(deg)": round(lower_angle, 2),        # 하체 각도
                 "wind speed(m/s)": round(wind_speed, 2),          # 풍속/풍향
-                "swing angle(deg)": round(swing_angle, 2)         # 선회 각도/속도
+                "swing angle(deg)": round(swing_angle, 2),        # 선회 각도/속도
+                "status 1": round(status_1, 2),                   # STATUS 1 (필요 시 정수형 변환 고려)
+                "status 2": round(status_2, 2)                   # STATUS 2
             }
                
             print(f"[MAIN][DECODED] {data}")
@@ -247,7 +265,7 @@ class Crane_Final_Test:
 
 """
 if __name__ == "__main__":    
-    crane_tester = Crane_Final_Test(port='/dev/ttyUSB0')
+    crane_tester = koceti_Read_Modbus(port='/dev/ttyUSB0')
     
     # 2. 장비에 연결
     if crane_tester.connect():

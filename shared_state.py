@@ -27,9 +27,13 @@ class SharedState:
         self._status_1 = 0            # STATUS 1
         self._status_2 = 0            # STATUS 2
         self._lower_angle = 0         # 하체 각도
-        
+
+        self._body_angle_x = 0
+        self._body_angle_y = 0
+                
         # --- 객체 인식관련 변수 ---
-        self._obj_info = {}        # 객체
+        self._obj_couint = 0
+        self._obj_distance = 0
         
         #기기의 시리얼 넘버
         self._device_serial = "0000000000000000"
@@ -117,14 +121,23 @@ class SharedState:
         with self._lock:
             self._lower_angle = angle
 
-    def set_obj_info(self, obj_info):
+    def set_obj_info(self, count, distance):
         with self._lock:
-            self._obj_info = obj_info
+            self._obj_couint = count
+            self._obj_distance = distance
 
     def set_serial_info(self, device_serial):
         with self._lock:
             self._device_serial = device_serial            
 
+    def set_body_angle_x(self, _body_angle_x):
+        with self._lock:
+            self._body_angle_x = _body_angle_x
+
+    def set_body_angle_y(self, _body_angle_y):
+        with self._lock:
+            self._body_angle_y = _body_angle_y
+            
     # ==========================
     # Getter 메소드
     # ==========================
@@ -208,11 +221,19 @@ class SharedState:
     def get_lower_angle(self):
         with self._lock:
             return self._lower_angle
-
+            
     def get_obj_info(self):
         with self._lock:
-            return self._obj_info        
+            return self._obj_couint, self._obj_distance       
 
     def get_serial_info(self):
         with self._lock:
             return self._device_serial        
+
+    def get_body_angle_x(self):
+        with self._lock:
+            return self._body_angle_x         
+
+    def get_body_angle_y(self):
+        with self._lock:
+            return self._body_angle_y       

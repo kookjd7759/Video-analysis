@@ -116,30 +116,23 @@ class AnalysisApp:
             if isinstance(detections, list):
                 with self._lock:
                     self._latest_objects = detections
-                
-                # 1. /info와 똑같은 형태의 리스트 만들기
-                formatted_objects = []
+                distance = 99.00
+                count = 0
                 for o in detections:
                     if not isinstance(o, dict):
                         continue
-                    dist = o.get("distance")
-                    center = o.get("center")
                     
+                    d = o.get("distance")
+                                     
                     # 유효한 숫자인지 확인 후 포맷팅 (거리 소수점 2자리, 센터 3자리)
-                    if isinstance(dist, (int, float)) and isinstance(center, (int, float)):
-                        formatted_objects.append({
-                            "distance": round(float(dist), 2),
-                            "center": round(float(center), 3)
-                        })
-
-                # 2. 최종 딕셔너리 생성 (JSON 구조와 동일)
-                final_dict = {
-                    "count": len(formatted_objects),
-                    "objects": formatted_objects
-                }
+                    if isinstance(d, (int, float)):
+                        val = float(d)
+                        count += 1
+                        if val < distance:
+                            distance = round(val, 2)
 
                 # 3. 메서드 호출하여 딕셔너리 통째로 넘기기
-                self.shared_state.set_obj_info(final_dict)
+                self.shared_state.set_obj_info(count, distance)
                 
             # 스트리밍용 JPEG 프레임을 미리 만들어 공유 버퍼에 저장
             h, w = frame.shape[:2]
@@ -451,7 +444,7 @@ class AnalysisApp:
             </body>
             </html>
             '''
-
+        
     def start_server(self):
         # Flask debug=False 필수(스레드용)
         self.server_thread = threading.Thread(target=self.app.run, kwargs={

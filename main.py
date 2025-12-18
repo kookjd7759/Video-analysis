@@ -6,19 +6,19 @@
 from analysis import AnalysisApp
 import time
 import socket
-import queue
 from send_ip import send_ip
 from koceti_worker import koceti_worker
-from CraneDataSimulatorWorker import CraneDataSimulatorWorker
+from transmit_Crane_Data_Worker import transmit_Crane_Data_Worker
+from Update_Can_Data import Update_Can_Data
 from shared_state import SharedState
 from flask import Flask, request # request 임포트 필요
 import requests # API 호출을 위해 임포트
+from Crane_MQTT import MQTTClient # Crane_MQTT.py 파일이 있다고 가정
 
 # [추가] mDNS 라이브러리 임포트
 from zeroconf import ServiceInfo, Zeroconf
 
-# 내 IP를 192.168.50.10으로 고정
-#sudo ifconfig eth0 192.168.50.10 netmask 255.255.255.0 up
+
 id_addr = send_ip()
 
 def make_local_url(port=5000):
@@ -37,9 +37,30 @@ def get_cpu_serial():
     except:
         return "ERROR"
     return "0000000000000000"
-
-final_data_queue = queue.Queue()
+# MQTT 클라이언트와 같은 내부 객체는 여기서 생성합니다.
+mqttclient = MQTTClient()
 shared_state = SharedState()
+
+# 2. 각 워커 객체 생성. 'shared_state'를 공통으로 전달합니다.
+koceti_poller = koceti_worker(
+    target_ip='0.0.0.0',    # Client Address
+    port=5005,    # Client port
+    main_crane_port='/dev/ttyUSB0', # Server (Passive)
+    shared_state=shared_state, 
+    period_sec=0.05
+)
+
+can_data = Update_Can_Data(
+    shared_state=shared_state,
+    mqttclient=mqttclient,
+    period_sec=0.2
+)
+
+data_simulator = transmit_Crane_Data_Worker(
+    shared_state=shared_state,
+    mqttclient=mqttclient,
+    period_sec=0.5
+)
 
 app = AnalysisApp(
     host="0.0.0.0", 
@@ -47,26 +68,14 @@ app = AnalysisApp(
     shared_state=shared_state
 )
 
-# 2. 각 워커 객체 생성. 'shared_state'를 공통으로 전달합니다.
-koceti_poller = koceti_worker(
-    target_ip="0.0.0.0",    # Client Address
-    port=5005,    # Client port
-    main_crane_port='/dev/ttyUSB0', # Server (Passive)
-    data_queue=final_data_queue, 
-    shared_state=shared_state, 
-    period_sec=1.0
-)
-
-data_simulator = CraneDataSimulatorWorker(
-    data_queue=final_data_queue,
-    shared_state=shared_state,
-    period_sec=1.0
-)
-
 # mDNS(ZeroConf) 객체 변수 준비
 zeroconf = None 
 
 try:
+    # --- MQTT 연결 및 루프 시작 ---
+    mqttclient.connecting()
+    mqttclient.loop_start()
+    
     url = make_local_url()
     device_id = get_cpu_serial()
     shared_state.set_serial_info(device_id)
@@ -75,8 +84,9 @@ try:
     app.start_background_capture()
     app.start_server()
     koceti_poller.start()
+    can_data.start()
     data_simulator.start()
-
+    
     # mDNS 서비스 등록 (여기서 네트워크에 방송 시작)
     try:
         desc = {'path': '/radar.png'}
@@ -97,10 +107,11 @@ try:
     # 3. 메인 프로그램은 최종 통합된 데이터를 큐에서 꺼내 사용합니다.
     while True:
         try:
-            integrated_data = final_data_queue.get(timeout=2.0)
-            print(app.get_current_detections_list())
+            detections = app.get_current_detections_list()
+            if detections:  # 리스트가 비어있지 않으면 True
+                print(detections)
             #time.sleep(0.2)
-        except queue.Empty:
+        except Exception:
             # 워커들이 살아있는지 확인
             if not koceti_poller._th.is_alive() or not data_simulator._th.is_alive():
                 print("[Main] [ERROR] 하나 이상의 워커 쓰레드가 중지되었습니다.")
@@ -131,6 +142,7 @@ finally:
     app.stop_background_capture()
     koceti_poller.stop()
     data_simulator.stop()
+    can_data.stop()
     
     # 3. 모든 스레드가 종료될 때까지 기다립니다.
     if app.server_thread and app.server_thread.is_alive():
@@ -139,6 +151,11 @@ finally:
 
     koceti_poller.join()
     data_simulator.join()
-    
+    can_data.join()
+
+    print("[Main] MQTT 연결을 종료합니다.")
+    mqttclient.loop_stop()
+    mqttclient.disconnect()
+
     print("[Main] 모든 워커가 성공적으로 종료되었습니다.")
     print("[Main] 프로그램 종료.")
